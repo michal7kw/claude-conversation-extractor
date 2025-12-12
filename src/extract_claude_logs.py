@@ -285,9 +285,15 @@ class ClaudeConversationExtractor:
             input("\nPress Enter to continue...")
 
     def save_as_markdown(
-        self, conversation: List[Dict[str, str]], session_id: str
+        self, conversation: List[Dict[str, str]], session_id: str, by_day: bool = False
     ) -> Optional[Path]:
-        """Save conversation as clean markdown file."""
+        """Save conversation as clean markdown file.
+
+        Args:
+            conversation: The conversation data
+            session_id: Session identifier
+            by_day: If True, save to a date-based subdirectory (YYYY-MM-DD)
+        """
         if not conversation:
             return None
 
@@ -307,7 +313,15 @@ class ClaudeConversationExtractor:
             time_str = ""
 
         filename = f"claude-conversation-{date_str}-{session_id[:8]}.md"
-        output_path = self.output_dir / filename
+
+        # Determine output directory (with optional date subfolder)
+        if by_day:
+            output_dir = self.output_dir / date_str
+            output_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            output_dir = self.output_dir
+
+        output_path = output_dir / filename
 
         with open(output_path, "w", encoding="utf-8") as f:
             f.write("# Claude Conversation Log\n\n")
@@ -344,9 +358,15 @@ class ClaudeConversationExtractor:
         return output_path
     
     def save_as_json(
-        self, conversation: List[Dict[str, str]], session_id: str
+        self, conversation: List[Dict[str, str]], session_id: str, by_day: bool = False
     ) -> Optional[Path]:
-        """Save conversation as JSON file."""
+        """Save conversation as JSON file.
+
+        Args:
+            conversation: The conversation data
+            session_id: Session identifier
+            by_day: If True, save to a date-based subdirectory (YYYY-MM-DD)
+        """
         if not conversation:
             return None
 
@@ -362,7 +382,15 @@ class ClaudeConversationExtractor:
             date_str = datetime.now().strftime("%Y-%m-%d")
 
         filename = f"claude-conversation-{date_str}-{session_id[:8]}.json"
-        output_path = self.output_dir / filename
+
+        # Determine output directory (with optional date subfolder)
+        if by_day:
+            output_dir = self.output_dir / date_str
+            output_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            output_dir = self.output_dir
+
+        output_path = output_dir / filename
 
         # Create JSON structure
         output = {
@@ -378,9 +406,15 @@ class ClaudeConversationExtractor:
         return output_path
     
     def save_as_html(
-        self, conversation: List[Dict[str, str]], session_id: str
+        self, conversation: List[Dict[str, str]], session_id: str, by_day: bool = False
     ) -> Optional[Path]:
-        """Save conversation as HTML file with syntax highlighting."""
+        """Save conversation as HTML file with syntax highlighting.
+
+        Args:
+            conversation: The conversation data
+            session_id: Session identifier
+            by_day: If True, save to a date-based subdirectory (YYYY-MM-DD)
+        """
         if not conversation:
             return None
 
@@ -399,7 +433,15 @@ class ClaudeConversationExtractor:
             time_str = ""
 
         filename = f"claude-conversation-{date_str}-{session_id[:8]}.html"
-        output_path = self.output_dir / filename
+
+        # Determine output directory (with optional date subfolder)
+        if by_day:
+            output_dir = self.output_dir / date_str
+            output_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            output_dir = self.output_dir
+
+        output_path = output_dir / filename
 
         # HTML template with modern styling
         html_content = f"""<!DOCTYPE html>
@@ -523,21 +565,23 @@ class ClaudeConversationExtractor:
         return output_path
 
     def save_conversation(
-        self, conversation: List[Dict[str, str]], session_id: str, format: str = "markdown"
+        self, conversation: List[Dict[str, str]], session_id: str,
+        format: str = "markdown", by_day: bool = False
     ) -> Optional[Path]:
         """Save conversation in the specified format.
-        
+
         Args:
             conversation: The conversation data
             session_id: Session identifier
             format: Output format ('markdown', 'json', 'html')
+            by_day: If True, save to a date-based subdirectory (YYYY-MM-DD)
         """
         if format == "markdown":
-            return self.save_as_markdown(conversation, session_id)
+            return self.save_as_markdown(conversation, session_id, by_day=by_day)
         elif format == "json":
-            return self.save_as_json(conversation, session_id)
+            return self.save_as_json(conversation, session_id, by_day=by_day)
         elif format == "html":
-            return self.save_as_html(conversation, session_id)
+            return self.save_as_html(conversation, session_id, by_day=by_day)
         else:
             print(f"❌ Unsupported format: {format}")
             return None
@@ -666,16 +710,17 @@ class ClaudeConversationExtractor:
         return sessions[:limit]
 
     def extract_multiple(
-        self, sessions: List[Path], indices: List[int], 
-        format: str = "markdown", detailed: bool = False
+        self, sessions: List[Path], indices: List[int],
+        format: str = "markdown", detailed: bool = False, by_day: bool = False
     ) -> Tuple[int, int]:
         """Extract multiple sessions by index.
-        
+
         Args:
             sessions: List of session paths
             indices: Indices to extract
             format: Output format ('markdown', 'json', 'html')
             detailed: If True, include tool use and system messages
+            by_day: If True, save to date-based subdirectories (YYYY-MM-DD)
         """
         success = 0
         total = len(indices)
@@ -685,7 +730,9 @@ class ClaudeConversationExtractor:
                 session_path = sessions[idx]
                 conversation = self.extract_conversation(session_path, detailed=detailed)
                 if conversation:
-                    output_path = self.save_conversation(conversation, session_path.stem, format=format)
+                    output_path = self.save_conversation(
+                        conversation, session_path.stem, format=format, by_day=by_day
+                    )
                     success += 1
                     msg_count = len(conversation)
                     print(
@@ -717,6 +764,7 @@ Examples:
   %(prog)s --format json --all       # Export all as JSON
   %(prog)s --format html --extract 1 # Export session 1 as HTML
   %(prog)s --detailed --extract 1    # Include tool use & system messages
+  %(prog)s --by-day --all            # Organize exports into date folders
         """,
     )
     parser.add_argument("--list", action="store_true", help="List recent sessions")
@@ -785,6 +833,11 @@ Examples:
         "--detailed",
         action="store_true",
         help="Include tool use, MCP responses, and system messages in export"
+    )
+    parser.add_argument(
+        "--by-day",
+        action="store_true",
+        help="Organize extracted conversations into date folders (YYYY-MM-DD)"
     )
 
     args = parser.parse_args()
@@ -933,8 +986,11 @@ Examples:
             print(f"\n📤 Extracting {len(indices)} session(s) as {args.format.upper()}...")
             if args.detailed:
                 print("📋 Including detailed tool use and system messages")
+            if args.by_day:
+                print("📅 Organizing by date folders")
             success, total = extractor.extract_multiple(
-                sessions, indices, format=args.format, detailed=args.detailed
+                sessions, indices, format=args.format, detailed=args.detailed,
+                by_day=args.by_day
             )
             print(f"\n✅ Successfully extracted {success}/{total} sessions")
 
@@ -944,10 +1000,13 @@ Examples:
         print(f"\n📤 Extracting {limit} most recent sessions as {args.format.upper()}...")
         if args.detailed:
             print("📋 Including detailed tool use and system messages")
+        if args.by_day:
+            print("📅 Organizing by date folders")
 
         indices = list(range(limit))
         success, total = extractor.extract_multiple(
-            sessions, indices, format=args.format, detailed=args.detailed
+            sessions, indices, format=args.format, detailed=args.detailed,
+            by_day=args.by_day
         )
         print(f"\n✅ Successfully extracted {success}/{total} sessions")
 
@@ -956,10 +1015,13 @@ Examples:
         print(f"\n📤 Extracting all {len(sessions)} sessions as {args.format.upper()}...")
         if args.detailed:
             print("📋 Including detailed tool use and system messages")
+        if args.by_day:
+            print("📅 Organizing by date folders")
 
         indices = list(range(len(sessions)))
         success, total = extractor.extract_multiple(
-            sessions, indices, format=args.format, detailed=args.detailed
+            sessions, indices, format=args.format, detailed=args.detailed,
+            by_day=args.by_day
         )
         print(f"\n✅ Successfully extracted {success}/{total} sessions")
 
