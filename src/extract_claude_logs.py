@@ -284,8 +284,28 @@ class ClaudeConversationExtractor:
             print(f"❌ Error displaying conversation: {e}")
             input("\nPress Enter to continue...")
 
+    def _get_output_dir(
+        self, date_str: str, by_day: bool = False,
+        by_project: bool = False, project_name: Optional[str] = None
+    ) -> Path:
+        """Determine output directory based on organization options.
+
+        Hierarchy when both are used: project/date/
+        """
+        output_dir = self.output_dir
+
+        if by_project and project_name:
+            output_dir = output_dir / project_name
+
+        if by_day:
+            output_dir = output_dir / date_str
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return output_dir
+
     def save_as_markdown(
-        self, conversation: List[Dict[str, str]], session_id: str, by_day: bool = False
+        self, conversation: List[Dict[str, str]], session_id: str,
+        by_day: bool = False, by_project: bool = False, project_name: Optional[str] = None
     ) -> Optional[Path]:
         """Save conversation as clean markdown file.
 
@@ -293,6 +313,8 @@ class ClaudeConversationExtractor:
             conversation: The conversation data
             session_id: Session identifier
             by_day: If True, save to a date-based subdirectory (YYYY-MM-DD)
+            by_project: If True, save to a project-based subdirectory
+            project_name: Name of the project (extracted from session path)
         """
         if not conversation:
             return None
@@ -314,13 +336,8 @@ class ClaudeConversationExtractor:
 
         filename = f"claude-conversation-{date_str}-{session_id[:8]}.md"
 
-        # Determine output directory (with optional date subfolder)
-        if by_day:
-            output_dir = self.output_dir / date_str
-            output_dir.mkdir(parents=True, exist_ok=True)
-        else:
-            output_dir = self.output_dir
-
+        # Determine output directory
+        output_dir = self._get_output_dir(date_str, by_day, by_project, project_name)
         output_path = output_dir / filename
 
         with open(output_path, "w", encoding="utf-8") as f:
@@ -358,7 +375,8 @@ class ClaudeConversationExtractor:
         return output_path
     
     def save_as_json(
-        self, conversation: List[Dict[str, str]], session_id: str, by_day: bool = False
+        self, conversation: List[Dict[str, str]], session_id: str,
+        by_day: bool = False, by_project: bool = False, project_name: Optional[str] = None
     ) -> Optional[Path]:
         """Save conversation as JSON file.
 
@@ -366,6 +384,8 @@ class ClaudeConversationExtractor:
             conversation: The conversation data
             session_id: Session identifier
             by_day: If True, save to a date-based subdirectory (YYYY-MM-DD)
+            by_project: If True, save to a project-based subdirectory
+            project_name: Name of the project (extracted from session path)
         """
         if not conversation:
             return None
@@ -383,13 +403,8 @@ class ClaudeConversationExtractor:
 
         filename = f"claude-conversation-{date_str}-{session_id[:8]}.json"
 
-        # Determine output directory (with optional date subfolder)
-        if by_day:
-            output_dir = self.output_dir / date_str
-            output_dir.mkdir(parents=True, exist_ok=True)
-        else:
-            output_dir = self.output_dir
-
+        # Determine output directory
+        output_dir = self._get_output_dir(date_str, by_day, by_project, project_name)
         output_path = output_dir / filename
 
         # Create JSON structure
@@ -406,7 +421,8 @@ class ClaudeConversationExtractor:
         return output_path
     
     def save_as_html(
-        self, conversation: List[Dict[str, str]], session_id: str, by_day: bool = False
+        self, conversation: List[Dict[str, str]], session_id: str,
+        by_day: bool = False, by_project: bool = False, project_name: Optional[str] = None
     ) -> Optional[Path]:
         """Save conversation as HTML file with syntax highlighting.
 
@@ -414,6 +430,8 @@ class ClaudeConversationExtractor:
             conversation: The conversation data
             session_id: Session identifier
             by_day: If True, save to a date-based subdirectory (YYYY-MM-DD)
+            by_project: If True, save to a project-based subdirectory
+            project_name: Name of the project (extracted from session path)
         """
         if not conversation:
             return None
@@ -434,13 +452,8 @@ class ClaudeConversationExtractor:
 
         filename = f"claude-conversation-{date_str}-{session_id[:8]}.html"
 
-        # Determine output directory (with optional date subfolder)
-        if by_day:
-            output_dir = self.output_dir / date_str
-            output_dir.mkdir(parents=True, exist_ok=True)
-        else:
-            output_dir = self.output_dir
-
+        # Determine output directory
+        output_dir = self._get_output_dir(date_str, by_day, by_project, project_name)
         output_path = output_dir / filename
 
         # HTML template with modern styling
@@ -566,7 +579,8 @@ class ClaudeConversationExtractor:
 
     def save_conversation(
         self, conversation: List[Dict[str, str]], session_id: str,
-        format: str = "markdown", by_day: bool = False
+        format: str = "markdown", by_day: bool = False,
+        by_project: bool = False, project_name: Optional[str] = None
     ) -> Optional[Path]:
         """Save conversation in the specified format.
 
@@ -575,13 +589,24 @@ class ClaudeConversationExtractor:
             session_id: Session identifier
             format: Output format ('markdown', 'json', 'html')
             by_day: If True, save to a date-based subdirectory (YYYY-MM-DD)
+            by_project: If True, save to a project-based subdirectory
+            project_name: Name of the project (extracted from session path)
         """
         if format == "markdown":
-            return self.save_as_markdown(conversation, session_id, by_day=by_day)
+            return self.save_as_markdown(
+                conversation, session_id, by_day=by_day,
+                by_project=by_project, project_name=project_name
+            )
         elif format == "json":
-            return self.save_as_json(conversation, session_id, by_day=by_day)
+            return self.save_as_json(
+                conversation, session_id, by_day=by_day,
+                by_project=by_project, project_name=project_name
+            )
         elif format == "html":
-            return self.save_as_html(conversation, session_id, by_day=by_day)
+            return self.save_as_html(
+                conversation, session_id, by_day=by_day,
+                by_project=by_project, project_name=project_name
+            )
         else:
             print(f"❌ Unsupported format: {format}")
             return None
@@ -709,9 +734,25 @@ class ClaudeConversationExtractor:
         print("\n" + "=" * 80)
         return sessions[:limit]
 
+    def _get_project_name(self, session_path: Path) -> str:
+        """Extract a clean project name from the session path.
+
+        The session files are in ~/.claude/projects/<project-path-encoded>/
+        This extracts and cleans the project folder name.
+        """
+        project_folder = session_path.parent.name
+        # Clean up the folder name (it may be URL-encoded or have special chars)
+        # Replace common path separators with underscores
+        project_name = project_folder.replace('-', '_').replace('%', '_')
+        # Limit length and clean up
+        if len(project_name) > 50:
+            project_name = project_name[:50]
+        return project_name or "unknown_project"
+
     def extract_multiple(
         self, sessions: List[Path], indices: List[int],
-        format: str = "markdown", detailed: bool = False, by_day: bool = False
+        format: str = "markdown", detailed: bool = False,
+        by_day: bool = False, by_project: bool = False
     ) -> Tuple[int, int]:
         """Extract multiple sessions by index.
 
@@ -721,6 +762,7 @@ class ClaudeConversationExtractor:
             format: Output format ('markdown', 'json', 'html')
             detailed: If True, include tool use and system messages
             by_day: If True, save to date-based subdirectories (YYYY-MM-DD)
+            by_project: If True, save to project-based subdirectories
         """
         success = 0
         total = len(indices)
@@ -730,8 +772,12 @@ class ClaudeConversationExtractor:
                 session_path = sessions[idx]
                 conversation = self.extract_conversation(session_path, detailed=detailed)
                 if conversation:
+                    # Extract project name from path if needed
+                    project_name = self._get_project_name(session_path) if by_project else None
+
                     output_path = self.save_conversation(
-                        conversation, session_path.stem, format=format, by_day=by_day
+                        conversation, session_path.stem, format=format,
+                        by_day=by_day, by_project=by_project, project_name=project_name
                     )
                     success += 1
                     msg_count = len(conversation)
@@ -765,6 +811,8 @@ Examples:
   %(prog)s --format html --extract 1 # Export session 1 as HTML
   %(prog)s --detailed --extract 1    # Include tool use & system messages
   %(prog)s --by-day --all            # Organize exports into date folders
+  %(prog)s --by-project --all        # Organize exports into project folders
+  %(prog)s --by-project --by-day --all  # project/date hierarchy
         """,
     )
     parser.add_argument("--list", action="store_true", help="List recent sessions")
@@ -838,6 +886,11 @@ Examples:
         "--by-day",
         action="store_true",
         help="Organize extracted conversations into date folders (YYYY-MM-DD)"
+    )
+    parser.add_argument(
+        "--by-project",
+        action="store_true",
+        help="Organize extracted conversations into project folders"
     )
 
     args = parser.parse_args()
@@ -986,11 +1039,13 @@ Examples:
             print(f"\n📤 Extracting {len(indices)} session(s) as {args.format.upper()}...")
             if args.detailed:
                 print("📋 Including detailed tool use and system messages")
+            if args.by_project:
+                print("📂 Organizing by project folders")
             if args.by_day:
                 print("📅 Organizing by date folders")
             success, total = extractor.extract_multiple(
                 sessions, indices, format=args.format, detailed=args.detailed,
-                by_day=args.by_day
+                by_day=args.by_day, by_project=args.by_project
             )
             print(f"\n✅ Successfully extracted {success}/{total} sessions")
 
@@ -1000,13 +1055,15 @@ Examples:
         print(f"\n📤 Extracting {limit} most recent sessions as {args.format.upper()}...")
         if args.detailed:
             print("📋 Including detailed tool use and system messages")
+        if args.by_project:
+            print("📂 Organizing by project folders")
         if args.by_day:
             print("📅 Organizing by date folders")
 
         indices = list(range(limit))
         success, total = extractor.extract_multiple(
             sessions, indices, format=args.format, detailed=args.detailed,
-            by_day=args.by_day
+            by_day=args.by_day, by_project=args.by_project
         )
         print(f"\n✅ Successfully extracted {success}/{total} sessions")
 
@@ -1015,13 +1072,15 @@ Examples:
         print(f"\n📤 Extracting all {len(sessions)} sessions as {args.format.upper()}...")
         if args.detailed:
             print("📋 Including detailed tool use and system messages")
+        if args.by_project:
+            print("📂 Organizing by project folders")
         if args.by_day:
             print("📅 Organizing by date folders")
 
         indices = list(range(len(sessions)))
         success, total = extractor.extract_multiple(
             sessions, indices, format=args.format, detailed=args.detailed,
-            by_day=args.by_day
+            by_day=args.by_day, by_project=args.by_project
         )
         print(f"\n✅ Successfully extracted {success}/{total} sessions")
 
