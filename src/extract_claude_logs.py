@@ -286,11 +286,19 @@ class ClaudeConversationExtractor:
 
     def _get_output_dir(
         self, date_str: str, by_day: bool = False,
-        by_project: bool = False, project_name: Optional[str] = None
+        by_project: bool = False, project_name: Optional[str] = None,
+        create: bool = True
     ) -> Path:
         """Determine output directory based on organization options.
 
         Hierarchy when both are used: project/date/
+
+        Args:
+            date_str: Date string in YYYY-MM-DD format
+            by_day: If True, include date in path
+            by_project: If True, include project name in path
+            project_name: Name of the project
+            create: If True, create the directory if it doesn't exist
         """
         output_dir = self.output_dir
 
@@ -300,8 +308,29 @@ class ClaudeConversationExtractor:
         if by_day:
             output_dir = output_dir / date_str
 
-        output_dir.mkdir(parents=True, exist_ok=True)
+        if create:
+            output_dir.mkdir(parents=True, exist_ok=True)
         return output_dir
+
+    def _get_date_from_session(self, session_path: Path) -> str:
+        """Extract date string from a session file's first message timestamp.
+
+        Returns date in YYYY-MM-DD format, or current date if extraction fails.
+        """
+        try:
+            with open(session_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    try:
+                        entry = json.loads(line.strip())
+                        timestamp = entry.get("timestamp", "")
+                        if timestamp:
+                            dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                            return dt.strftime("%Y-%m-%d")
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+        except Exception:
+            pass
+        return datetime.now().strftime("%Y-%m-%d")
 
     def save_as_markdown(
         self, conversation: List[Dict[str, str]], session_id: str,
@@ -752,7 +781,8 @@ class ClaudeConversationExtractor:
     def extract_multiple(
         self, sessions: List[Path], indices: List[int],
         format: str = "markdown", detailed: bool = False,
-        by_day: bool = False, by_project: bool = False
+        by_day: bool = False, by_project: bool = False,
+        skip_existing: bool = False
     ) -> Tuple[int, int]:
         """Extract multiple sessions by index.
 
@@ -763,13 +793,32 @@ class ClaudeConversationExtractor:
             detailed: If True, include tool use and system messages
             by_day: If True, save to date-based subdirectories (YYYY-MM-DD)
             by_project: If True, save to project-based subdirectories
+            skip_existing: If True, skip if output folder already exists
         """
         success = 0
+        skipped = 0
         total = len(indices)
 
         for idx in indices:
             if 0 <= idx < len(sessions):
                 session_path = sessions[idx]
+
+                # Check if we should skip based on existing output folder
+                if skip_existing and (by_day or by_project):
+                    project_name = self._get_project_name(session_path) if by_project else None
+                    date_str = self._get_date_from_session(session_path) if by_day else ""
+
+                    # Get the output directory path without creating it
+                    output_dir = self._get_output_dir(
+                        date_str, by_day=by_day, by_project=by_project,
+                        project_name=project_name, create=False
+                    )
+
+                    if output_dir.exists():
+                        skipped += 1
+                        print(f"⏭️  Skipped: {output_dir.relative_to(self.output_dir)} (already exists)")
+                        continue
+
                 conversation = self.extract_conversation(session_path, detailed=detailed)
                 if conversation:
                     # Extract project name from path if needed
@@ -782,7 +831,7 @@ class ClaudeConversationExtractor:
                     success += 1
                     msg_count = len(conversation)
                     print(
-                        f"✅ {success}/{total}: {output_path.name} "
+                        f"✅ {success}/{total - skipped}: {output_path.name} "
                         f"({msg_count} messages)"
                     )
                 else:
@@ -813,6 +862,7 @@ Examples:
   %(prog)s --by-day --all            # Organize exports into date folders
   %(prog)s --by-project --all        # Organize exports into project folders
   %(prog)s --by-project --by-day --all  # project/date hierarchy
+  %(prog)s --by-day --skip-existing --all  # skip already extracted dates
         """,
     )
     parser.add_argument("--list", action="store_true", help="List recent sessions")
@@ -891,6 +941,11 @@ Examples:
         "--by-project",
         action="store_true",
         help="Organize extracted conversations into project folders"
+    )
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Skip extraction if output folder already exists (use with --by-day/--by-project)"
     )
 
     args = parser.parse_args()
@@ -1043,9 +1098,12 @@ Examples:
                 print("📂 Organizing by project folders")
             if args.by_day:
                 print("📅 Organizing by date folders")
+            if args.skip_existing:
+                print("⏭️  Skipping existing folders")
             success, total = extractor.extract_multiple(
                 sessions, indices, format=args.format, detailed=args.detailed,
-                by_day=args.by_day, by_project=args.by_project
+                by_day=args.by_day, by_project=args.by_project,
+                skip_existing=args.skip_existing
             )
             print(f"\n✅ Successfully extracted {success}/{total} sessions")
 
@@ -1059,11 +1117,14 @@ Examples:
             print("📂 Organizing by project folders")
         if args.by_day:
             print("📅 Organizing by date folders")
+        if args.skip_existing:
+            print("⏭️  Skipping existing folders")
 
         indices = list(range(limit))
         success, total = extractor.extract_multiple(
             sessions, indices, format=args.format, detailed=args.detailed,
-            by_day=args.by_day, by_project=args.by_project
+            by_day=args.by_day, by_project=args.by_project,
+            skip_existing=args.skip_existing
         )
         print(f"\n✅ Successfully extracted {success}/{total} sessions")
 
@@ -1076,11 +1137,14 @@ Examples:
             print("📂 Organizing by project folders")
         if args.by_day:
             print("📅 Organizing by date folders")
+        if args.skip_existing:
+            print("⏭️  Skipping existing folders")
 
         indices = list(range(len(sessions)))
         success, total = extractor.extract_multiple(
             sessions, indices, format=args.format, detailed=args.detailed,
-            by_day=args.by_day, by_project=args.by_project
+            by_day=args.by_day, by_project=args.by_project,
+            skip_existing=args.skip_existing
         )
         print(f"\n✅ Successfully extracted {success}/{total} sessions")
 
