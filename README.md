@@ -175,7 +175,7 @@ claude-extract --help
 | `--by-day` | Organize into date folders (YYYY-MM-DD) |
 | `--by-project` | Organize into project folders |
 | `--by-project --by-day` | Hierarchy: project/date/ |
-| `--skip-existing` | Skip if output folder already exists |
+| `--skip-existing` | Skip if output file already exists |
 
 ### Search Options
 
@@ -293,9 +293,9 @@ claude-extract --by-project --by-day --all
 # First run: extracts everything
 claude-extract --by-day --all --output ~/daily-backup
 
-# Second run: skips already extracted dates
+# Second run: skips already extracted files
 claude-extract --by-day --skip-existing --all --output ~/daily-backup
-# Output: "Skipped: 2025-12-10 (already exists)"
+# Output: "Skipped: 2025-12-10/claude-conversation-2025-12-10-abc123.md (already exists)"
 
 # Perfect for daily cron jobs - only exports new conversations
 claude-extract --by-project --by-day --skip-existing --all
@@ -443,10 +443,11 @@ claude-extract --by-project --all
 ```
 
 ### How do I do incremental backups?
-Use `--skip-existing` with `--by-day` or `--by-project` to skip already-exported folders:
+Use `--skip-existing` to skip already-exported files:
 ```bash
 claude-extract --by-day --skip-existing --all
 ```
+This checks if each output file exists and skips it if so, allowing new conversations to be exported while preserving existing ones.
 
 ### Where does Claude Code store conversations?
 Claude Code saves all chats in `~/.claude/projects/` as JSONL files. There's no built-in export feature - that's why this tool exists.

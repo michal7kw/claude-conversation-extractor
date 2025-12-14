@@ -778,6 +778,34 @@ class ClaudeConversationExtractor:
             project_name = project_name[:50]
         return project_name or "unknown_project"
 
+    def _get_output_file_path(
+        self, session_id: str, date_str: str, format: str,
+        by_day: bool = False, by_project: bool = False, project_name: Optional[str] = None
+    ) -> Path:
+        """Get the full output file path without creating directories.
+
+        Args:
+            session_id: Session identifier
+            date_str: Date string in YYYY-MM-DD format
+            format: Output format ('markdown', 'json', 'html')
+            by_day: If True, include date in path
+            by_project: If True, include project name in path
+            project_name: Name of the project
+        """
+        # Determine file extension
+        ext_map = {"markdown": "md", "json": "json", "html": "html"}
+        ext = ext_map.get(format, "md")
+
+        filename = f"claude-conversation-{date_str}-{session_id[:8]}.{ext}"
+
+        # Get output directory (without creating it)
+        output_dir = self._get_output_dir(
+            date_str, by_day=by_day, by_project=by_project,
+            project_name=project_name, create=False
+        )
+
+        return output_dir / filename
+
     def extract_multiple(
         self, sessions: List[Path], indices: List[int],
         format: str = "markdown", detailed: bool = False,
@@ -793,7 +821,7 @@ class ClaudeConversationExtractor:
             detailed: If True, include tool use and system messages
             by_day: If True, save to date-based subdirectories (YYYY-MM-DD)
             by_project: If True, save to project-based subdirectories
-            skip_existing: If True, skip if output folder already exists
+            skip_existing: If True, skip if output file already exists
         """
         success = 0
         skipped = 0
@@ -803,20 +831,24 @@ class ClaudeConversationExtractor:
             if 0 <= idx < len(sessions):
                 session_path = sessions[idx]
 
-                # Check if we should skip based on existing output folder
-                if skip_existing and (by_day or by_project):
+                # Check if we should skip based on existing output file
+                if skip_existing:
                     project_name = self._get_project_name(session_path) if by_project else None
-                    date_str = self._get_date_from_session(session_path) if by_day else ""
+                    date_str = self._get_date_from_session(session_path)
 
-                    # Get the output directory path without creating it
-                    output_dir = self._get_output_dir(
-                        date_str, by_day=by_day, by_project=by_project,
-                        project_name=project_name, create=False
+                    # Get the full output file path
+                    output_file = self._get_output_file_path(
+                        session_path.stem, date_str, format,
+                        by_day=by_day, by_project=by_project, project_name=project_name
                     )
 
-                    if output_dir.exists():
+                    if output_file.exists():
                         skipped += 1
-                        print(f"⏭️  Skipped: {output_dir.relative_to(self.output_dir)} (already exists)")
+                        try:
+                            rel_path = output_file.relative_to(self.output_dir)
+                        except ValueError:
+                            rel_path = output_file.name
+                        print(f"⏭️  Skipped: {rel_path} (already exists)")
                         continue
 
                 conversation = self.extract_conversation(session_path, detailed=detailed)
@@ -945,7 +977,7 @@ Examples:
     parser.add_argument(
         "--skip-existing",
         action="store_true",
-        help="Skip extraction if output folder already exists (use with --by-day/--by-project)"
+        help="Skip extraction if output file already exists"
     )
 
     args = parser.parse_args()
