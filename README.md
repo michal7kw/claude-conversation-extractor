@@ -1,5 +1,11 @@
 # Claude Conversation Extractor - Export Claude Code Conversations to Markdown | Save Chat History
 
+run
+```
+claude-extract --by-project --by-day --skip-existing --all --output .
+```
+
+
 > **The ONLY tool to export Claude Code conversations**. Extract Claude chat history from ~/.claude/projects, search through logs, and backup your AI programming sessions.
 
 ## Two Ways to Use
