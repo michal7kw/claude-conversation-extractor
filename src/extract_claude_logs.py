@@ -162,6 +162,148 @@ class ClaudeConversationExtractor:
 
         return conversation
 
+    def extract_bash_commands(self, jsonl_path: Path) -> List[Dict]:
+        """Extract successful bash commands with their surrounding context.
+
+        Returns a list of dicts with:
+        - command: The bash command that was run
+        - context: The assistant's text commentary before/around the command
+        - timestamp: When the command was run
+        """
+        bash_commands = []
+
+        # We need to parse the file and track:
+        # 1. Assistant text (context)
+        # 2. Bash tool_use entries
+        # 3. Corresponding tool_result entries
+
+        try:
+            entries = []
+            with open(jsonl_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        entry = json.loads(line.strip())
+                        entries.append(entry)
+                    except json.JSONDecodeError:
+                        continue
+
+            # Track context from assistant messages
+            current_context = []
+            pending_bash_commands = []  # Commands waiting for their results
+
+            for i, entry in enumerate(entries):
+                entry_type = entry.get("type", "")
+
+                # Collect assistant text as context
+                if entry_type == "assistant" and "message" in entry:
+                    msg = entry["message"]
+                    if isinstance(msg, dict) and msg.get("role") == "assistant":
+                        content = msg.get("content", [])
+
+                        # Extract text and tool_use from assistant content
+                        if isinstance(content, list):
+                            for item in content:
+                                if isinstance(item, dict):
+                                    if item.get("type") == "text":
+                                        text = item.get("text", "").strip()
+                                        if text:
+                                            current_context.append(text)
+                                    elif item.get("type") == "tool_use":
+                                        tool_name = item.get("name", "").lower()
+                                        if tool_name == "bash":
+                                            tool_input = item.get("input", {})
+                                            command = tool_input.get("command", "")
+                                            tool_use_id = item.get("id", "")
+                                            if command:
+                                                pending_bash_commands.append({
+                                                    "command": command,
+                                                    "context": "\n\n".join(current_context),
+                                                    "timestamp": entry.get("timestamp", ""),
+                                                    "tool_use_id": tool_use_id,
+                                                })
+                                                # Reset context after capturing for a command
+                                                current_context = []
+                        elif isinstance(content, str) and content.strip():
+                            current_context.append(content.strip())
+
+                # Handle standalone tool_use entries (some logs have them separate)
+                elif entry_type == "tool_use":
+                    tool_data = entry.get("tool", {})
+                    tool_name = tool_data.get("name", "").lower()
+                    if tool_name == "bash":
+                        tool_input = tool_data.get("input", {})
+                        command = tool_input.get("command", "")
+                        tool_use_id = entry.get("tool_use_id", "") or entry.get("id", "")
+                        if command:
+                            pending_bash_commands.append({
+                                "command": command,
+                                "context": "\n\n".join(current_context),
+                                "timestamp": entry.get("timestamp", ""),
+                                "tool_use_id": tool_use_id,
+                            })
+                            current_context = []
+
+                # Check tool_result entries to see if commands succeeded
+                elif entry_type == "tool_result":
+                    result = entry.get("result", {})
+                    tool_use_id = entry.get("tool_use_id", "")
+
+                    # Check if this result has an error
+                    has_error = bool(result.get("error"))
+
+                    # Also check for common error indicators in output
+                    output = result.get("output", "")
+                    is_error_output = False
+                    if output:
+                        # Check for common error patterns
+                        error_patterns = [
+                            "command not found",
+                            "No such file or directory",
+                            "Permission denied",
+                            "fatal:",
+                            "error:",
+                            "Error:",
+                            "FAILED",
+                        ]
+                        # Only mark as error if it's clearly an error, not just contains the word
+                        first_line = output.split('\n')[0].lower() if output else ""
+                        is_error_output = any(
+                            pattern.lower() in first_line
+                            for pattern in error_patterns[:4]  # Only check definitive error patterns
+                        )
+
+                    # Match with pending commands
+                    if pending_bash_commands:
+                        # If we have a tool_use_id, try to match it
+                        matched_cmd = None
+                        if tool_use_id:
+                            for cmd in pending_bash_commands:
+                                if cmd.get("tool_use_id") == tool_use_id:
+                                    matched_cmd = cmd
+                                    pending_bash_commands.remove(cmd)
+                                    break
+
+                        # Otherwise, match with the oldest pending command
+                        if not matched_cmd and pending_bash_commands:
+                            matched_cmd = pending_bash_commands.pop(0)
+
+                        # Only add if successful (no error)
+                        if matched_cmd and not has_error and not is_error_output:
+                            bash_commands.append({
+                                "command": matched_cmd["command"],
+                                "context": matched_cmd["context"],
+                                "timestamp": matched_cmd["timestamp"],
+                            })
+
+                # Reset context on user messages (new turn)
+                elif entry_type == "user":
+                    current_context = []
+
+        except Exception as e:
+            print(f"❌ Error extracting bash commands from {jsonl_path}: {e}")
+
+        return bash_commands
+
     def _extract_text_content(self, content, detailed: bool = False) -> str:
         """Extract text from various content formats Claude uses.
         
@@ -606,6 +748,70 @@ class ClaudeConversationExtractor:
 
         return output_path
 
+    def save_bash_commands_as_markdown(
+        self, bash_commands: List[Dict], session_id: str,
+        by_day: bool = False, by_project: bool = False, project_name: Optional[str] = None
+    ) -> Optional[Path]:
+        """Save extracted bash commands as a markdown file.
+
+        Args:
+            bash_commands: List of bash command dicts with command, context, timestamp
+            session_id: Session identifier
+            by_day: If True, save to a date-based subdirectory (YYYY-MM-DD)
+            by_project: If True, save to a project-based subdirectory
+            project_name: Name of the project (extracted from session path)
+        """
+        if not bash_commands:
+            return None
+
+        # Get timestamp from first command
+        first_timestamp = bash_commands[0].get("timestamp", "")
+        if first_timestamp:
+            try:
+                dt = datetime.fromisoformat(first_timestamp.replace("Z", "+00:00"))
+                date_str = dt.strftime("%Y-%m-%d")
+                time_str = dt.strftime("%H:%M:%S")
+            except Exception:
+                date_str = datetime.now().strftime("%Y-%m-%d")
+                time_str = ""
+        else:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+            time_str = ""
+
+        filename = f"bash-commands-{date_str}-{session_id[:8]}.md"
+
+        # Determine output directory
+        output_dir = self._get_output_dir(date_str, by_day, by_project, project_name)
+        output_path = output_dir / filename
+
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write("# Bash Commands Log\n\n")
+            f.write(f"Session ID: {session_id}\n")
+            f.write(f"Date: {date_str}")
+            if time_str:
+                f.write(f" {time_str}")
+            f.write(f"\n\nTotal commands: {len(bash_commands)}\n\n")
+            f.write("---\n\n")
+
+            for i, cmd in enumerate(bash_commands, 1):
+                command = cmd.get("command", "")
+                context = cmd.get("context", "")
+
+                # Write context (assistant's commentary) if available
+                if context:
+                    f.write(f"{context}\n\n")
+
+                # Write the command in a bash code block
+                f.write("```bash\n")
+                f.write(f"{command}\n")
+                f.write("```\n\n")
+
+                # Add separator between commands (except for the last one)
+                if i < len(bash_commands):
+                    f.write("---\n\n")
+
+        return output_path
+
     def save_conversation(
         self, conversation: List[Dict[str, str]], session_id: str,
         format: str = "markdown", by_day: bool = False,
@@ -810,7 +1016,7 @@ class ClaudeConversationExtractor:
         self, sessions: List[Path], indices: List[int],
         format: str = "markdown", detailed: bool = False,
         by_day: bool = False, by_project: bool = False,
-        skip_existing: bool = False
+        overwrite: bool = False
     ) -> Tuple[int, int]:
         """Extract multiple sessions by index.
 
@@ -821,7 +1027,7 @@ class ClaudeConversationExtractor:
             detailed: If True, include tool use and system messages
             by_day: If True, save to date-based subdirectories (YYYY-MM-DD)
             by_project: If True, save to project-based subdirectories
-            skip_existing: If True, skip if output file already exists
+            overwrite: If True, overwrite existing files; if False (default), skip them
         """
         success = 0
         skipped = 0
@@ -831,8 +1037,8 @@ class ClaudeConversationExtractor:
             if 0 <= idx < len(sessions):
                 session_path = sessions[idx]
 
-                # Check if we should skip based on existing output file
-                if skip_existing:
+                # Check if file exists and skip unless overwrite is set
+                if not overwrite:
                     project_name = self._get_project_name(session_path) if by_project else None
                     date_str = self._get_date_from_session(session_path)
 
@@ -873,6 +1079,73 @@ class ClaudeConversationExtractor:
 
         return success, total
 
+    def extract_bash_commands_multiple(
+        self, sessions: List[Path], indices: List[int],
+        by_day: bool = False, by_project: bool = False,
+        overwrite: bool = False
+    ) -> Tuple[int, int]:
+        """Extract bash commands from multiple sessions by index.
+
+        Args:
+            sessions: List of session paths
+            indices: Indices to extract
+            by_day: If True, save to date-based subdirectories (YYYY-MM-DD)
+            by_project: If True, save to project-based subdirectories
+            overwrite: If True, overwrite existing files; if False (default), skip them
+        """
+        success = 0
+        skipped = 0
+        total = len(indices)
+        total_commands = 0
+
+        for idx in indices:
+            if 0 <= idx < len(sessions):
+                session_path = sessions[idx]
+
+                # Check if file exists and skip unless overwrite is set
+                if not overwrite:
+                    project_name = self._get_project_name(session_path) if by_project else None
+                    date_str = self._get_date_from_session(session_path)
+
+                    # Get the expected output file path
+                    output_dir = self._get_output_dir(
+                        date_str, by_day=by_day, by_project=by_project,
+                        project_name=project_name, create=False
+                    )
+                    output_file = output_dir / f"bash-commands-{date_str}-{session_path.stem[:8]}.md"
+
+                    if output_file.exists():
+                        skipped += 1
+                        try:
+                            rel_path = output_file.relative_to(self.output_dir)
+                        except ValueError:
+                            rel_path = output_file.name
+                        print(f"⏭️  Skipped: {rel_path} (already exists)")
+                        continue
+
+                bash_commands = self.extract_bash_commands(session_path)
+                if bash_commands:
+                    # Extract project name from path if needed
+                    project_name = self._get_project_name(session_path) if by_project else None
+
+                    output_path = self.save_bash_commands_as_markdown(
+                        bash_commands, session_path.stem,
+                        by_day=by_day, by_project=by_project, project_name=project_name
+                    )
+                    success += 1
+                    cmd_count = len(bash_commands)
+                    total_commands += cmd_count
+                    print(
+                        f"✅ {success}/{total - skipped}: {output_path.name} "
+                        f"({cmd_count} commands)"
+                    )
+                else:
+                    print(f"⏭️  Skipped session {idx + 1} (no bash commands)")
+            else:
+                print(f"❌ Invalid session number: {idx + 1}")
+
+        return success, total_commands
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -895,6 +1168,9 @@ Examples:
   %(prog)s --by-project --all        # Organize exports into project folders
   %(prog)s --by-project --by-day --all  # project/date hierarchy
   %(prog)s --by-day --skip-existing --all  # skip already extracted dates
+  %(prog)s --bash-commands --extract 1    # Extract bash commands from session 1
+  %(prog)s --bash-commands --all          # Extract bash commands from all sessions
+  %(prog)s --overwrite --all              # Overwrite existing files
         """,
     )
     parser.add_argument("--list", action="store_true", help="List recent sessions")
@@ -977,10 +1253,25 @@ Examples:
     parser.add_argument(
         "--skip-existing",
         action="store_true",
-        help="Skip extraction if output file already exists"
+        help="Skip existing files (default behavior, kept for backwards compatibility)"
+    )
+    parser.add_argument(
+        "--bash-commands",
+        action="store_true",
+        help="Extract only successful bash commands with context (instead of full conversation)"
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing output files instead of skipping them"
     )
 
     args = parser.parse_args()
+
+    # Check for mutually exclusive options
+    if args.skip_existing and args.overwrite:
+        print("❌ Error: --skip-existing and --overwrite are mutually exclusive")
+        return
 
     # Handle interactive mode
     if args.interactive or (args.export and args.export.lower() == "logs"):
@@ -1123,7 +1414,60 @@ Examples:
                 continue
 
         if indices:
-            print(f"\n📤 Extracting {len(indices)} session(s) as {args.format.upper()}...")
+            if args.bash_commands:
+                print(f"\n📤 Extracting bash commands from {len(indices)} session(s)...")
+                if args.by_project:
+                    print("📂 Organizing by project folders")
+                if args.by_day:
+                    print("📅 Organizing by date folders")
+                if args.overwrite:
+                    print("🔄 Overwriting existing files")
+                success, total_cmds = extractor.extract_bash_commands_multiple(
+                    sessions, indices,
+                    by_day=args.by_day, by_project=args.by_project,
+                    overwrite=args.overwrite
+                )
+                print(f"\n✅ Successfully extracted {total_cmds} commands from {success} sessions")
+            else:
+                print(f"\n📤 Extracting {len(indices)} session(s) as {args.format.upper()}...")
+                if args.detailed:
+                    print("📋 Including detailed tool use and system messages")
+                if args.by_project:
+                    print("📂 Organizing by project folders")
+                if args.by_day:
+                    print("📅 Organizing by date folders")
+                if args.overwrite:
+                    print("🔄 Overwriting existing files")
+                success, total = extractor.extract_multiple(
+                    sessions, indices, format=args.format, detailed=args.detailed,
+                    by_day=args.by_day, by_project=args.by_project,
+                    overwrite=args.overwrite
+                )
+                print(f"\n✅ Successfully extracted {success}/{total} sessions")
+
+    elif args.recent:
+        sessions = extractor.find_sessions()
+        limit = min(args.recent, len(sessions))
+        indices = list(range(limit))
+
+        if args.bash_commands:
+            print(f"\n📤 Extracting bash commands from {limit} most recent sessions...")
+            if args.by_project:
+                print("📂 Organizing by project folders")
+            if args.by_day:
+                print("📅 Organizing by date folders")
+            if args.skip_existing:
+                print("⏭️  Skipping existing files")
+            if args.overwrite:
+                print("🔄 Overwriting existing files")
+            success, total_cmds = extractor.extract_bash_commands_multiple(
+                sessions, indices,
+                by_day=args.by_day, by_project=args.by_project,
+                overwrite=args.overwrite
+            )
+            print(f"\n✅ Successfully extracted {total_cmds} commands from {success} sessions")
+        else:
+            print(f"\n📤 Extracting {limit} most recent sessions as {args.format.upper()}...")
             if args.detailed:
                 print("📋 Including detailed tool use and system messages")
             if args.by_project:
@@ -1131,54 +1475,54 @@ Examples:
             if args.by_day:
                 print("📅 Organizing by date folders")
             if args.skip_existing:
-                print("⏭️  Skipping existing folders")
+                print("⏭️  Skipping existing files")
+            if args.overwrite:
+                print("🔄 Overwriting existing files")
             success, total = extractor.extract_multiple(
                 sessions, indices, format=args.format, detailed=args.detailed,
                 by_day=args.by_day, by_project=args.by_project,
-                skip_existing=args.skip_existing
+                overwrite=args.overwrite
             )
             print(f"\n✅ Successfully extracted {success}/{total} sessions")
 
-    elif args.recent:
-        sessions = extractor.find_sessions()
-        limit = min(args.recent, len(sessions))
-        print(f"\n📤 Extracting {limit} most recent sessions as {args.format.upper()}...")
-        if args.detailed:
-            print("📋 Including detailed tool use and system messages")
-        if args.by_project:
-            print("📂 Organizing by project folders")
-        if args.by_day:
-            print("📅 Organizing by date folders")
-        if args.skip_existing:
-            print("⏭️  Skipping existing folders")
-
-        indices = list(range(limit))
-        success, total = extractor.extract_multiple(
-            sessions, indices, format=args.format, detailed=args.detailed,
-            by_day=args.by_day, by_project=args.by_project,
-            skip_existing=args.skip_existing
-        )
-        print(f"\n✅ Successfully extracted {success}/{total} sessions")
-
     elif args.all:
         sessions = extractor.find_sessions()
-        print(f"\n📤 Extracting all {len(sessions)} sessions as {args.format.upper()}...")
-        if args.detailed:
-            print("📋 Including detailed tool use and system messages")
-        if args.by_project:
-            print("📂 Organizing by project folders")
-        if args.by_day:
-            print("📅 Organizing by date folders")
-        if args.skip_existing:
-            print("⏭️  Skipping existing folders")
-
         indices = list(range(len(sessions)))
-        success, total = extractor.extract_multiple(
-            sessions, indices, format=args.format, detailed=args.detailed,
-            by_day=args.by_day, by_project=args.by_project,
-            skip_existing=args.skip_existing
-        )
-        print(f"\n✅ Successfully extracted {success}/{total} sessions")
+
+        if args.bash_commands:
+            print(f"\n📤 Extracting bash commands from all {len(sessions)} sessions...")
+            if args.by_project:
+                print("📂 Organizing by project folders")
+            if args.by_day:
+                print("📅 Organizing by date folders")
+            if args.skip_existing:
+                print("⏭️  Skipping existing files")
+            if args.overwrite:
+                print("🔄 Overwriting existing files")
+            success, total_cmds = extractor.extract_bash_commands_multiple(
+                sessions, indices,
+                by_day=args.by_day, by_project=args.by_project,
+                overwrite=args.overwrite
+            )
+            print(f"\n✅ Successfully extracted {total_cmds} commands from {success} sessions")
+        else:
+            print(f"\n📤 Extracting all {len(sessions)} sessions as {args.format.upper()}...")
+            if args.detailed:
+                print("📋 Including detailed tool use and system messages")
+            if args.by_project:
+                print("📂 Organizing by project folders")
+            if args.by_day:
+                print("📅 Organizing by date folders")
+            if args.skip_existing:
+                print("⏭️  Skipping existing files")
+            if args.overwrite:
+                print("🔄 Overwriting existing files")
+            success, total = extractor.extract_multiple(
+                sessions, indices, format=args.format, detailed=args.detailed,
+                by_day=args.by_day, by_project=args.by_project,
+                overwrite=args.overwrite
+            )
+            print(f"\n✅ Successfully extracted {success}/{total} sessions")
 
 
 def launch_interactive():

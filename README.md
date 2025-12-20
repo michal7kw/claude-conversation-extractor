@@ -2,7 +2,7 @@
 
 run
 ```
-claude-extract --by-project --by-day --skip-existing --all --output .
+claude-extract --overwrite --by-project --by-day --all --output .
 ```
 
 
@@ -50,6 +50,7 @@ This is the **ONLY tool that exports Claude Code conversations**:
 - **Claude JSONL to Markdown**: Clean export without terminal artifacts
 - **Find Any Chat**: Search by content, date, or conversation name
 - **Bulk Export**: Extract all Claude Code conversations at once
+- **Extract Bash Commands**: Export only successful bash commands with context commentary
 - **Organize by Date/Project**: Structure exports into date or project folders
 - **Skip Existing**: Incremental exports that skip already-extracted conversations
 - **Zero Config**: Just run `claude-extract` - we find everything automatically
@@ -164,6 +165,7 @@ claude-extract --help
 | `--recent N` | Extract N most recent sessions |
 | `--all` | Extract all sessions |
 | `--output DIR` | Save to custom directory |
+| `--bash-commands` | Extract only successful bash commands with context |
 
 ### Export Format Options
 
@@ -181,7 +183,7 @@ claude-extract --help
 | `--by-day` | Organize into date folders (YYYY-MM-DD) |
 | `--by-project` | Organize into project folders |
 | `--by-project --by-day` | Hierarchy: project/date/ |
-| `--skip-existing` | Skip if output file already exists |
+| `--overwrite` | Overwrite existing files (default is to skip) |
 
 ### Search Options
 
@@ -293,22 +295,24 @@ claude-extract --by-project --by-day --all
 #         └── claude-conversation-2025-12-11-ghi789.md
 ```
 
-### Incremental Exports (Skip Existing)
+### Incremental Exports and Overwrite
 
 ```bash
 # First run: extracts everything
 claude-extract --by-day --all --output ~/daily-backup
 
-# Second run: skips already extracted files
-claude-extract --by-day --skip-existing --all --output ~/daily-backup
+# Second run: automatically skips already extracted files (default behavior)
+claude-extract --by-day --all --output ~/daily-backup
 # Output: "Skipped: 2025-12-10/claude-conversation-2025-12-10-abc123.md (already exists)"
 
 # Perfect for daily cron jobs - only exports new conversations
-claude-extract --by-project --by-day --skip-existing --all
+claude-extract --by-project --by-day --all
 
-# Skip existing with specific format
-claude-extract --by-day --skip-existing --format html --all
+# Use --overwrite to replace existing files (e.g., re-export with different options)
+claude-extract --by-day --overwrite --all --output ~/daily-backup
 ```
+
+**Note**: By default, existing files are skipped. Use `--overwrite` to replace them.
 
 ### Search Conversations
 
@@ -339,11 +343,61 @@ claude-extract --search "here's how" --search-speaker assistant
 claude-extract --search "API" --case-sensitive
 ```
 
+### Extract Bash Commands
+
+```bash
+# Extract bash commands from a specific session
+claude-extract --bash-commands --extract 1
+
+# Extract bash commands from multiple sessions
+claude-extract --bash-commands --extract 1,3,5
+
+# Extract bash commands from recent sessions
+claude-extract --bash-commands --recent 10
+
+# Extract bash commands from all sessions
+claude-extract --bash-commands --all
+
+# Organize bash command exports by project and date
+claude-extract --bash-commands --by-project --by-day --all
+
+# Bash command exports also skip existing files by default
+claude-extract --bash-commands --all
+```
+
+**Output format**: Creates markdown files like `bash-commands-2025-01-15-abc123.md`:
+```markdown
+# Bash Commands Log
+
+Session ID: abc12345
+Date: 2025-01-15 10:00:00
+
+Total commands: 3
+
+---
+
+Let me check the git status:
+
+```bash
+git status
+```
+
+---
+
+Now installing dependencies:
+
+```bash
+npm install
+```
+```
+
+**Note**: Only successful commands are included - failed commands (errors, command not found, etc.) are filtered out automatically.
+
 ### Combined Examples
 
 ```bash
-# Daily backup script: organized, incremental, detailed HTML exports
-claude-extract --by-project --by-day --skip-existing --format html --detailed --all --output ~/claude-daily-backup
+# Daily backup script: organized, incremental (default), detailed HTML exports
+claude-extract --by-project --by-day --format html --detailed --all --output ~/claude-daily-backup
 
 # Export recent work on specific project
 claude-extract --by-day --recent 10 --output ~/current-project-logs
@@ -361,13 +415,13 @@ claude-extract --by-project --by-day --detailed --format html --all --output ~/c
 ### Automation Examples
 
 ```bash
-# Cron job for daily backup (add to crontab)
-0 2 * * * /path/to/claude-extract --by-project --by-day --skip-existing --all --output ~/claude-backups
+# Cron job for daily backup (add to crontab) - skips existing files by default
+0 2 * * * /path/to/claude-extract --by-project --by-day --all --output ~/claude-backups
 
 # Backup script
 #!/bin/bash
 DATE=$(date +%Y-%m-%d)
-claude-extract --by-project --by-day --skip-existing --all --output ~/backups/claude-$DATE
+claude-extract --by-project --by-day --all --output ~/backups/claude-$DATE
 
 # Export and compress
 claude-extract --all --output /tmp/claude-export && tar -czf ~/claude-backup.tar.gz /tmp/claude-export
@@ -449,11 +503,18 @@ claude-extract --by-project --all
 ```
 
 ### How do I do incremental backups?
-Use `--skip-existing` to skip already-exported files:
+By default, the tool skips already-exported files, making incremental backups automatic:
 ```bash
-claude-extract --by-day --skip-existing --all
+claude-extract --by-day --all
 ```
-This checks if each output file exists and skips it if so, allowing new conversations to be exported while preserving existing ones.
+This checks if each output file exists and skips it, allowing new conversations to be exported while preserving existing ones. Use `--overwrite` if you need to replace existing files.
+
+### How do I extract only bash commands?
+Use `--bash-commands` to export only successful terminal commands with their context:
+```bash
+claude-extract --bash-commands --all
+```
+This creates markdown files containing just the bash commands Claude ran, along with the assistant's explanatory text. Failed commands are automatically filtered out.
 
 ### Where does Claude Code store conversations?
 Claude Code saves all chats in `~/.claude/projects/` as JSONL files. There's no built-in export feature - that's why this tool exists.
@@ -490,7 +551,8 @@ No, this is an independent open-source tool. It reads the local Claude Code file
 | Clean formatting | Perfect Markdown | Terminal artifacts | N/A |
 | Organize by date | `--by-day` flag | Manual | N/A |
 | Organize by project | `--by-project` flag | Manual | N/A |
-| Incremental export | `--skip-existing` flag | N/A | N/A |
+| Incremental export | Default (skips existing) | N/A | N/A |
+| Extract bash commands | `--bash-commands` flag | N/A | N/A |
 | Multiple formats | MD, JSON, HTML | Text only | N/A |
 | Zero configuration | Auto-detects | Manual process | N/A |
 | Cross-platform | Win/Mac/Linux | Manual works | N/A |
@@ -588,7 +650,8 @@ See [INSTALL.md](docs/user/INSTALL.md) for:
 - [x] Direct search command (`claude-search`)
 - [x] Organize by date (`--by-day`)
 - [x] Organize by project (`--by-project`)
-- [x] Incremental exports (`--skip-existing`)
+- [x] Incremental exports (skip existing by default, `--overwrite` to replace)
+- [x] Extract bash commands only (`--bash-commands`)
 
 ### Planned Features
 - [ ] Export to PDF format
