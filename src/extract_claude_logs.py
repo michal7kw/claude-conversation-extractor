@@ -1359,8 +1359,6 @@ Examples:
 
     # Handle search mode
     if args.search or args.search_regex:
-        from datetime import datetime
-
         from search_conversations import ConversationSearcher
 
         searcher = ConversationSearcher()
