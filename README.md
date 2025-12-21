@@ -184,6 +184,8 @@ claude-extract --help
 | `--by-project` | Organize into project folders |
 | `--by-project --by-day` | Hierarchy: project/date/ |
 | `--overwrite` | Overwrite existing files (default is to skip) |
+| `--from-date YYYY-MM-DD` | Only extract sessions from this date onwards |
+| `--to-date YYYY-MM-DD` | Only extract sessions up to this date |
 
 ### Search Options
 
@@ -313,6 +315,28 @@ claude-extract --by-day --overwrite --all --output ~/daily-backup
 ```
 
 **Note**: By default, existing files are skipped. Use `--overwrite` to replace them.
+
+### Filter by Date Range
+
+```bash
+# Extract sessions from a specific date onwards
+claude-extract --from-date 2025-01-01 --all
+
+# Extract sessions up to a specific date
+claude-extract --to-date 2025-01-31 --all
+
+# Extract sessions within a date range
+claude-extract --from-date 2025-01-01 --to-date 2025-01-31 --all
+
+# Combine with other options
+claude-extract --from-date 2025-01-01 --by-project --by-day --all
+
+# Extract recent sessions within a date range
+claude-extract --from-date 2025-01-01 --recent 10
+
+# Extract bash commands from a specific month
+claude-extract --bash-commands --from-date 2025-01-01 --to-date 2025-01-31 --all
+```
 
 ### Search Conversations
 
@@ -516,6 +540,13 @@ claude-extract --bash-commands --all
 ```
 This creates markdown files containing just the bash commands Claude ran, along with the assistant's explanatory text. Failed commands are automatically filtered out.
 
+### How do I extract sessions from a specific date range?
+Use `--from-date` and `--to-date` to filter sessions by date:
+```bash
+claude-extract --from-date 2025-01-01 --to-date 2025-01-31 --all
+```
+This extracts only sessions from January 2025. You can use just one of the options to set a start or end date.
+
 ### Where does Claude Code store conversations?
 Claude Code saves all chats in `~/.claude/projects/` as JSONL files. There's no built-in export feature - that's why this tool exists.
 
@@ -652,6 +683,7 @@ See [INSTALL.md](docs/user/INSTALL.md) for:
 - [x] Organize by project (`--by-project`)
 - [x] Incremental exports (skip existing by default, `--overwrite` to replace)
 - [x] Extract bash commands only (`--bash-commands`)
+- [x] Date range filtering (`--from-date`, `--to-date`)
 
 ### Planned Features
 - [ ] Export to PDF format

@@ -474,6 +474,45 @@ class ClaudeConversationExtractor:
             pass
         return datetime.now().strftime("%Y-%m-%d")
 
+    def filter_sessions_by_date(
+        self, sessions: List[Path],
+        from_date: Optional[datetime] = None,
+        to_date: Optional[datetime] = None
+    ) -> List[Path]:
+        """Filter sessions by date range.
+
+        Args:
+            sessions: List of session paths
+            from_date: Only include sessions from this date onwards
+            to_date: Only include sessions up to this date
+
+        Returns:
+            Filtered list of session paths
+        """
+        if not from_date and not to_date:
+            return sessions
+
+        filtered = []
+        for session_path in sessions:
+            date_str = self._get_date_from_session(session_path)
+            try:
+                session_date = datetime.strptime(date_str, "%Y-%m-%d")
+
+                # Check from_date
+                if from_date and session_date < from_date:
+                    continue
+
+                # Check to_date (include the entire day)
+                if to_date and session_date > to_date:
+                    continue
+
+                filtered.append(session_path)
+            except ValueError:
+                # If we can't parse the date, include the session
+                filtered.append(session_path)
+
+        return filtered
+
     def save_as_markdown(
         self, conversation: List[Dict[str, str]], session_id: str,
         by_day: bool = False, by_project: bool = False, project_name: Optional[str] = None
@@ -1171,6 +1210,9 @@ Examples:
   %(prog)s --bash-commands --extract 1    # Extract bash commands from session 1
   %(prog)s --bash-commands --all          # Extract bash commands from all sessions
   %(prog)s --overwrite --all              # Overwrite existing files
+  %(prog)s --from-date 2025-01-01 --all   # Extract sessions from Jan 1, 2025
+  %(prog)s --to-date 2025-01-31 --all     # Extract sessions up to Jan 31, 2025
+  %(prog)s --from-date 2025-01-01 --to-date 2025-01-31 --all  # Date range
         """,
     )
     parser.add_argument("--list", action="store_true", help="List recent sessions")
@@ -1265,12 +1307,44 @@ Examples:
         action="store_true",
         help="Overwrite existing output files instead of skipping them"
     )
+    parser.add_argument(
+        "--from-date",
+        type=str,
+        help="Only extract sessions from this date onwards (YYYY-MM-DD)"
+    )
+    parser.add_argument(
+        "--to-date",
+        type=str,
+        help="Only extract sessions up to this date (YYYY-MM-DD)"
+    )
 
     args = parser.parse_args()
 
     # Check for mutually exclusive options
     if args.skip_existing and args.overwrite:
         print("❌ Error: --skip-existing and --overwrite are mutually exclusive")
+        return
+
+    # Parse date filters
+    from_date = None
+    to_date = None
+    if args.from_date:
+        try:
+            from_date = datetime.strptime(args.from_date, "%Y-%m-%d")
+        except ValueError:
+            print(f"❌ Invalid date format for --from-date: {args.from_date} (use YYYY-MM-DD)")
+            return
+
+    if args.to_date:
+        try:
+            to_date = datetime.strptime(args.to_date, "%Y-%m-%d")
+        except ValueError:
+            print(f"❌ Invalid date format for --to-date: {args.to_date} (use YYYY-MM-DD)")
+            return
+
+    # Validate date range
+    if from_date and to_date and from_date > to_date:
+        print("❌ Error: --from-date cannot be after --to-date")
         return
 
     # Handle interactive mode
@@ -1447,6 +1521,15 @@ Examples:
 
     elif args.recent:
         sessions = extractor.find_sessions()
+
+        # Apply date filter
+        if from_date or to_date:
+            sessions = extractor.filter_sessions_by_date(sessions, from_date, to_date)
+            if from_date:
+                print(f"📅 Filtering from: {from_date.strftime('%Y-%m-%d')}")
+            if to_date:
+                print(f"📅 Filtering to: {to_date.strftime('%Y-%m-%d')}")
+
         limit = min(args.recent, len(sessions))
         indices = list(range(limit))
 
@@ -1487,10 +1570,19 @@ Examples:
 
     elif args.all:
         sessions = extractor.find_sessions()
+
+        # Apply date filter
+        if from_date or to_date:
+            sessions = extractor.filter_sessions_by_date(sessions, from_date, to_date)
+            if from_date:
+                print(f"📅 Filtering from: {from_date.strftime('%Y-%m-%d')}")
+            if to_date:
+                print(f"📅 Filtering to: {to_date.strftime('%Y-%m-%d')}")
+
         indices = list(range(len(sessions)))
 
         if args.bash_commands:
-            print(f"\n📤 Extracting bash commands from all {len(sessions)} sessions...")
+            print(f"\n📤 Extracting bash commands from {len(sessions)} sessions...")
             if args.by_project:
                 print("📂 Organizing by project folders")
             if args.by_day:
@@ -1506,7 +1598,7 @@ Examples:
             )
             print(f"\n✅ Successfully extracted {total_cmds} commands from {success} sessions")
         else:
-            print(f"\n📤 Extracting all {len(sessions)} sessions as {args.format.upper()}...")
+            print(f"\n📤 Extracting {len(sessions)} sessions as {args.format.upper()}...")
             if args.detailed:
                 print("📋 Including detailed tool use and system messages")
             if args.by_project:
