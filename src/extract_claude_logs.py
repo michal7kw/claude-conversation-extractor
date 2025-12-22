@@ -65,6 +65,89 @@ class ClaudeConversationExtractor:
                 sessions.append(jsonl_file)
         return sorted(sessions, key=lambda x: x.stat().st_mtime, reverse=True)
 
+    def find_projects(self) -> List[Path]:
+        """Find all project directories containing JSONL files.
+
+        Returns list of project directories sorted by most recent session.
+        """
+        projects = {}
+        if self.claude_dir.exists():
+            for jsonl_file in self.claude_dir.rglob("*.jsonl"):
+                project_dir = jsonl_file.parent
+                # Track the most recent modification time for each project
+                mtime = jsonl_file.stat().st_mtime
+                if project_dir not in projects or mtime > projects[project_dir]:
+                    projects[project_dir] = mtime
+
+        # Sort by most recent modification time
+        return sorted(projects.keys(), key=lambda x: projects[x], reverse=True)
+
+    def list_projects(self) -> List[Path]:
+        """List all projects with details."""
+        projects = self.find_projects()
+
+        if not projects:
+            print("❌ No Claude projects found in ~/.claude/projects/")
+            print("💡 Make sure you've used Claude Code and have conversations saved.")
+            return []
+
+        print(f"\n📁 Found {len(projects)} Claude projects:\n")
+        print("=" * 80)
+
+        for i, project_dir in enumerate(projects, 1):
+            # Get project name (clean it up for display)
+            project_name = project_dir.name.replace('-', ' ').strip()
+            if project_name.startswith("Users"):
+                parts = project_name.split()
+                project_name = "~/" + "/".join(parts[2:]) if len(parts) > 2 else "Home"
+
+            # Count sessions in this project
+            sessions = list(project_dir.glob("*.jsonl"))
+            session_count = len(sessions)
+
+            # Get most recent session date
+            if sessions:
+                most_recent = max(sessions, key=lambda x: x.stat().st_mtime)
+                modified = datetime.fromtimestamp(most_recent.stat().st_mtime)
+                date_str = modified.strftime('%Y-%m-%d %H:%M')
+            else:
+                date_str = "Unknown"
+
+            # Calculate total size
+            total_size = sum(s.stat().st_size for s in sessions)
+            size_kb = total_size / 1024
+
+            print(f"\n{i}. 📁 {project_name}")
+            print(f"   📄 Sessions: {session_count}")
+            print(f"   📅 Last active: {date_str}")
+            print(f"   💾 Total size: {size_kb:.1f} KB")
+            print(f"   📂 Path: {project_dir.name}")
+
+        print("\n" + "=" * 80)
+        return projects
+
+    def filter_sessions_by_projects(
+        self, sessions: List[Path], project_indices: List[int], projects: List[Path]
+    ) -> List[Path]:
+        """Filter sessions to only include those from specified projects.
+
+        Args:
+            sessions: List of all session paths
+            project_indices: List of project indices (0-based)
+            projects: List of all project directories
+
+        Returns:
+            Filtered list of session paths
+        """
+        # Get the project directories for the specified indices
+        selected_project_dirs = set()
+        for idx in project_indices:
+            if 0 <= idx < len(projects):
+                selected_project_dirs.add(projects[idx])
+
+        # Filter sessions to only include those from selected projects
+        return [s for s in sessions if s.parent in selected_project_dirs]
+
     def extract_conversation(self, jsonl_path: Path, detailed: bool = False) -> List[Dict[str, str]]:
         """Extract conversation messages from a JSONL file.
         
@@ -1213,9 +1296,18 @@ Examples:
   %(prog)s --from-date 2025-01-01 --all   # Extract sessions from Jan 1, 2025
   %(prog)s --to-date 2025-01-31 --all     # Extract sessions up to Jan 31, 2025
   %(prog)s --from-date 2025-01-01 --to-date 2025-01-31 --all  # Date range
+  %(prog)s --list-projects             # List all projects
+  %(prog)s --project 1 --all           # Extract all sessions from project 1
+  %(prog)s --project 1,3 --recent 5    # Extract recent from multiple projects
         """,
     )
     parser.add_argument("--list", action="store_true", help="List recent sessions")
+    parser.add_argument("--list-projects", action="store_true", help="List all projects")
+    parser.add_argument(
+        "--project",
+        type=str,
+        help="Extract from specific project(s) by number (comma-separated)"
+    )
     parser.add_argument(
         "--extract",
         type=str,
@@ -1356,6 +1448,38 @@ Examples:
 
     # Initialize extractor with optional output directory
     extractor = ClaudeConversationExtractor(args.output)
+
+    # Handle --list-projects
+    if args.list_projects:
+        extractor.list_projects()
+        return
+
+    # Parse project filter
+    project_indices = []
+    projects = None
+    if args.project:
+        projects = extractor.find_projects()
+        if not projects:
+            print("❌ No projects found")
+            return
+
+        for num in args.project.split(","):
+            try:
+                idx = int(num.strip()) - 1  # Convert to 0-based index
+                if 0 <= idx < len(projects):
+                    project_indices.append(idx)
+                else:
+                    print(f"❌ Invalid project number: {num} (valid: 1-{len(projects)})")
+                    return
+            except ValueError:
+                print(f"❌ Invalid project number: {num}")
+                return
+
+        # Show which projects are selected
+        print(f"📁 Extracting from {len(project_indices)} project(s):")
+        for idx in project_indices:
+            project_name = projects[idx].name.replace('-', ' ').strip()
+            print(f"   - {project_name}")
 
     # Handle search mode
     if args.search or args.search_regex:
@@ -1520,6 +1644,10 @@ Examples:
     elif args.recent:
         sessions = extractor.find_sessions()
 
+        # Apply project filter
+        if project_indices and projects:
+            sessions = extractor.filter_sessions_by_projects(sessions, project_indices, projects)
+
         # Apply date filter
         if from_date or to_date:
             sessions = extractor.filter_sessions_by_date(sessions, from_date, to_date)
@@ -1568,6 +1696,10 @@ Examples:
 
     elif args.all:
         sessions = extractor.find_sessions()
+
+        # Apply project filter
+        if project_indices and projects:
+            sessions = extractor.filter_sessions_by_projects(sessions, project_indices, projects)
 
         # Apply date filter
         if from_date or to_date:

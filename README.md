@@ -166,6 +166,8 @@ claude-extract --help
 | `--all` | Extract all sessions |
 | `--output DIR` | Save to custom directory |
 | `--bash-commands` | Extract only successful bash commands with context |
+| `--list-projects` | List all available projects |
+| `--project N` | Extract from specific project(s) by number |
 
 ### Export Format Options
 
@@ -315,6 +317,28 @@ claude-extract --by-day --overwrite --all --output ~/daily-backup
 ```
 
 **Note**: By default, existing files are skipped. Use `--overwrite` to replace them.
+
+### Filter by Project
+
+```bash
+# List all available projects
+claude-extract --list-projects
+
+# Extract all sessions from a specific project
+claude-extract --project 1 --all
+
+# Extract from multiple projects
+claude-extract --project 1,3,5 --all
+
+# Extract recent sessions from a specific project
+claude-extract --project 2 --recent 10
+
+# Combine project filter with date range
+claude-extract --project 1 --from-date 2025-01-01 --all
+
+# Extract bash commands from a specific project
+claude-extract --bash-commands --project 2 --all
+```
 
 ### Filter by Date Range
 
@@ -547,6 +571,14 @@ claude-extract --from-date 2025-01-01 --to-date 2025-01-31 --all
 ```
 This extracts only sessions from January 2025. You can use just one of the options to set a start or end date.
 
+### How do I extract sessions from a specific project?
+First list all projects, then use `--project` to filter:
+```bash
+claude-extract --list-projects        # See all projects with numbers
+claude-extract --project 1 --all      # Extract from project #1
+claude-extract --project 1,3 --all    # Extract from multiple projects
+```
+
 ### Where does Claude Code store conversations?
 Claude Code saves all chats in `~/.claude/projects/` as JSONL files. There's no built-in export feature - that's why this tool exists.
 
@@ -684,6 +716,7 @@ See [INSTALL.md](docs/user/INSTALL.md) for:
 - [x] Incremental exports (skip existing by default, `--overwrite` to replace)
 - [x] Extract bash commands only (`--bash-commands`)
 - [x] Date range filtering (`--from-date`, `--to-date`)
+- [x] Project selection (`--list-projects`, `--project`)
 
 ### Planned Features
 - [ ] Export to PDF format
