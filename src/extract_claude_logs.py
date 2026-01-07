@@ -156,6 +156,7 @@ class ClaudeConversationExtractor:
             detailed: If True, include tool use, MCP responses, and system messages
         """
         conversation = []
+        pending_questions = {}  # Track questions by tool_use_id for Q&A matching
 
         try:
             with open(jsonl_path, "r", encoding="utf-8") as f:
@@ -167,6 +168,23 @@ class ClaudeConversationExtractor:
                         if entry.get("type") == "user" and "message" in entry:
                             msg = entry["message"]
                             if isinstance(msg, dict) and msg.get("role") == "user":
+                                # First check for Q&A answers (tool_result from AskUserQuestion)
+                                answer_data = self._extract_answers_from_entry(entry)
+                                if answer_data:
+                                    tool_id = answer_data["tool_use_id"]
+                                    if tool_id in pending_questions:
+                                        # Found matching question - add as Q&A pair
+                                        conversation.append(
+                                            {
+                                                "role": "qa",
+                                                "questions": pending_questions[tool_id],
+                                                "answers": answer_data["answers"],
+                                                "timestamp": entry.get("timestamp", ""),
+                                            }
+                                        )
+                                        del pending_questions[tool_id]
+                                        continue  # Skip normal user message processing
+
                                 content = msg.get("content", "")
                                 text = self._extract_text_content(content)
 
@@ -209,6 +227,12 @@ class ClaudeConversationExtractor:
                             msg = entry["message"]
                             if isinstance(msg, dict) and msg.get("role") == "assistant":
                                 content = msg.get("content", [])
+
+                                # Check for AskUserQuestion and store for later matching
+                                qa_data = self._extract_questions_from_content(content)
+                                if qa_data:
+                                    pending_questions[qa_data["tool_use_id"]] = qa_data["questions"]
+
                                 text = self._extract_text_content(content, detailed=detailed)
 
                                 if text and text.strip():
@@ -550,6 +574,50 @@ class ClaudeConversationExtractor:
             "content": content,
         }
 
+    def _extract_questions_from_content(self, content: list) -> Optional[Dict]:
+        """Extract AskUserQuestion data from message content.
+
+        Looks for tool_use entries with name "AskUserQuestion" and extracts
+        the questions array along with the tool_use_id for later matching.
+
+        Returns dict with tool_use_id and questions list, or None if not found.
+        """
+        if not isinstance(content, list):
+            return None
+
+        for item in content:
+            if isinstance(item, dict):
+                if item.get("type") == "tool_use" and item.get("name") == "AskUserQuestion":
+                    return {
+                        "tool_use_id": item.get("id"),
+                        "questions": item.get("input", {}).get("questions", [])
+                    }
+        return None
+
+    def _extract_answers_from_entry(self, entry: dict) -> Optional[Dict]:
+        """Extract answers from a user message entry with tool_result.
+
+        Looks for tool_result entries and extracts answers from the
+        toolUseResult field which contains structured answer data.
+
+        Returns dict with tool_use_id and answers dict, or None if not found.
+        """
+        content = entry.get("message", {}).get("content", [])
+        if not isinstance(content, list):
+            return None
+
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "tool_result":
+                tool_use_id = item.get("tool_use_id")
+                # Get structured answers from toolUseResult field
+                answers = entry.get("toolUseResult", {}).get("answers", {})
+                if answers and tool_use_id:
+                    return {
+                        "tool_use_id": tool_use_id,
+                        "answers": answers
+                    }
+        return None
+
     def display_conversation(self, jsonl_path: Path, detailed: bool = False) -> None:
         """Display a conversation in the terminal with pagination.
         
@@ -808,6 +876,18 @@ class ClaudeConversationExtractor:
                     if plan_content:
                         f.write("---\n\n")
                         f.write(f"{plan_content}\n\n")
+                elif role == "qa":
+                    f.write("## ❓ User Questions & Answers\n\n")
+                    questions = msg.get("questions", [])
+                    answers = msg.get("answers", {})
+                    for q in questions:
+                        question_text = q.get("question", "")
+                        header = q.get("header", "")
+                        answer = answers.get(question_text, "No answer")
+                        if header:
+                            f.write(f"### {header}\n\n")
+                        f.write(f"**Q:** {question_text}\n\n")
+                        f.write(f"**A:** {answer}\n\n")
                 else:
                     f.write(f"## {role}\n\n")
                     f.write(f"{content}\n\n")
@@ -975,6 +1055,27 @@ class ClaudeConversationExtractor:
             padding-top: 10px;
             margin-top: 10px;
         }}
+        .qa {{
+            border-left: 4px solid #e67e22;
+            background: #fef9f3;
+        }}
+        .qa-header {{
+            font-size: 1em;
+            font-weight: bold;
+            color: #d35400;
+            margin-top: 10px;
+            margin-bottom: 5px;
+        }}
+        .qa-question {{
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 5px;
+        }}
+        .qa-answer {{
+            color: #27ae60;
+            margin-left: 20px;
+            margin-bottom: 15px;
+        }}
         .role {{
             font-weight: bold;
             margin-bottom: 10px;
@@ -1028,7 +1129,8 @@ class ClaudeConversationExtractor:
                     "tool_use": "🔧 Tool Use",
                     "tool_result": "📤 Tool Result",
                     "system": "ℹ️ System",
-                    "plan": "📋 Approved Plan"
+                    "plan": "📋 Approved Plan",
+                    "qa": "❓ Questions & Answers"
                 }.get(role, role)
 
                 f.write(f'    <div class="message {role}">\n')
@@ -1048,6 +1150,22 @@ class ClaudeConversationExtractor:
                         f.write(f'        <div class="plan-path">Saved to: {plan_path}</div>\n')
                     if plan_content:
                         f.write(f'        <div class="plan-content">{plan_content}</div>\n')
+                elif role == "qa":
+                    # Special handling for Q&A messages
+                    questions = msg.get("questions", [])
+                    answers = msg.get("answers", {})
+                    for q in questions:
+                        question_text = q.get("question", "")
+                        header = q.get("header", "")
+                        answer = answers.get(question_text, "No answer")
+                        # Escape HTML
+                        question_text = question_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                        answer = str(answer).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                        header = header.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                        if header:
+                            f.write(f'        <div class="qa-header">{header}</div>\n')
+                        f.write(f'        <div class="qa-question">Q: {question_text}</div>\n')
+                        f.write(f'        <div class="qa-answer">A: {answer}</div>\n')
                 else:
                     f.write(f'        <div class="content">{content}</div>\n')
 

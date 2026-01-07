@@ -5,7 +5,9 @@
       "Bash(python:*)",
       "Bash(wc:*)",
       "Bash(grep:*)",
-      "Bash(PYTHONIOENCODING=utf-8 python:*)"
+      "Bash(PYTHONIOENCODING=utf-8 python:*)",
+      "Bash(python3:*)",
+      "Bash(find:*)"
     ]
   }
 }

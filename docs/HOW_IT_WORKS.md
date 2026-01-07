@@ -397,6 +397,120 @@ Extracted plans are stored as:
 
 ---
 
+## Q&A Extraction Deep Dive
+
+### How Questions and Answers Appear
+
+When Claude uses the `AskUserQuestion` tool, a question-answer pair is created:
+
+**Question Entry (in assistant message):**
+```json
+{
+  "type": "assistant",
+  "message": {
+    "content": [{
+      "type": "tool_use",
+      "id": "toolu_abc123",
+      "name": "AskUserQuestion",
+      "input": {
+        "questions": [
+          {
+            "question": "How should plans be included?",
+            "header": "Plan output",
+            "options": [
+              {"label": "Embed inline", "description": "Include directly"},
+              {"label": "Separate files", "description": "Extract separately"}
+            ],
+            "multiSelect": false
+          }
+        ]
+      }
+    }]
+  }
+}
+```
+
+**Answer Entry (in user message):**
+```json
+{
+  "type": "user",
+  "message": {
+    "content": [{
+      "type": "tool_result",
+      "tool_use_id": "toolu_abc123",
+      "content": "User has answered: \"How should...?\"=\"Embed inline\""
+    }]
+  },
+  "toolUseResult": {
+    "answers": {
+      "How should plans be included?": "Embed inline"
+    }
+  }
+}
+```
+
+### Linking Mechanism
+
+Questions and answers are linked via `tool_use_id`:
+- Question: `"id": "toolu_abc123"` in the tool_use object
+- Answer: `"tool_use_id": "toolu_abc123"` in the tool_result
+
+### Parsing Q&A
+
+The `_extract_questions_from_content()` method finds questions:
+
+```python
+def _extract_questions_from_content(self, content: list) -> Optional[Dict]:
+    """Extract AskUserQuestion data from message content."""
+    for item in content:
+        if isinstance(item, dict):
+            if item.get("type") == "tool_use" and item.get("name") == "AskUserQuestion":
+                return {
+                    "tool_use_id": item.get("id"),
+                    "questions": item.get("input", {}).get("questions", [])
+                }
+    return None
+```
+
+The `_extract_answers_from_entry()` method finds answers:
+
+```python
+def _extract_answers_from_entry(self, entry: dict) -> Optional[Dict]:
+    """Extract answers from a user message entry."""
+    content = entry.get("message", {}).get("content", [])
+    for item in content:
+        if isinstance(item, dict) and item.get("type") == "tool_result":
+            tool_use_id = item.get("tool_use_id")
+            answers = entry.get("toolUseResult", {}).get("answers", {})
+            if answers and tool_use_id:
+                return {"tool_use_id": tool_use_id, "answers": answers}
+    return None
+```
+
+### Result Structure
+
+Extracted Q&A pairs are stored as:
+
+```python
+{
+    "role": "qa",
+    "questions": [
+        {
+            "question": "How should plans be included?",
+            "header": "Plan output",
+            "options": [...],
+            "multiSelect": false
+        }
+    ],
+    "answers": {
+        "How should plans be included?": "Embed inline"
+    },
+    "timestamp": "2025-01-15T10:30:00.000Z"
+}
+```
+
+---
+
 ## Output Formatting
 
 ### Markdown Output
@@ -557,9 +671,10 @@ ClaudeConversationExtractor
 | **Session** | One conversation, stored in one JSONL file |
 | **Project** | Folder grouping sessions by working directory |
 | **Entry Type** | Category of JSONL entry: user, assistant, tool_use, etc. |
-| **Role** | Message role in output: user, assistant, plan, tool_use, etc. |
+| **Role** | Message role in output: user, assistant, plan, qa, tool_use, etc. |
 | **Detailed Mode** | Includes tool usage and system messages |
 | **Plan** | Special content type showing approved implementation plans |
+| **Q&A** | Questions asked to user via AskUserQuestion tool and their answers |
 
 ---
 

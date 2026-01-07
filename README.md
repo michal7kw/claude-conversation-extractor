@@ -51,6 +51,8 @@ This is the **ONLY tool that exports Claude Code conversations**:
 - **Find Any Chat**: Search by content, date, or conversation name
 - **Bulk Export**: Extract all Claude Code conversations at once
 - **Extract Bash Commands**: Export only successful bash commands with context commentary
+- **Extract Plans**: Automatically detect and format Claude's approved implementation plans
+- **Extract Q&A**: Capture user questions (AskUserQuestion tool) and their answers
 - **Organize by Date/Project**: Structure exports into date or project folders
 - **Skip Existing**: Incremental exports that skip already-extracted conversations
 - **Zero Config**: Just run `claude-extract` - we find everything automatically
@@ -441,6 +443,61 @@ npm install
 
 **Note**: Only successful commands are included - failed commands (errors, command not found, etc.) are filtered out automatically.
 
+### Automatic Plan & Q&A Extraction
+
+Plans and Q&A pairs are automatically extracted and formatted in all exports:
+
+```bash
+# Plans are automatically detected when you export
+claude-extract --extract 1
+# Output includes:
+# ## 📋 Approved Plan
+# **Multi-User Support Implementation Plan**
+# *Saved to: `~/.claude/plans/fuzzy-jumping-rabbit.md`*
+# ---
+# Executive Summary...
+
+# Q&A pairs are also automatically captured
+# ## ❓ User Questions & Answers
+# ### Plan output
+# **Q:** How should plans be included in the output?
+# **A:** Embed inline
+```
+
+**Plan Format in Exports:**
+```markdown
+## 📋 Approved Plan
+
+**My Implementation Plan**
+
+*Saved to: `~/.claude/plans/cosmic-dancing-star.md`*
+
+---
+
+Executive Summary
+
+This plan covers the implementation of...
+```
+
+**Q&A Format in Exports:**
+```markdown
+## ❓ User Questions & Answers
+
+### Feature selection
+
+**Q:** Which authentication method should we use?
+
+**A:** OAuth 2.0 (Recommended)
+
+### Database choice
+
+**Q:** Which database should we use?
+
+**A:** PostgreSQL
+```
+
+**Note**: Plans and Q&A pairs appear inline in the conversation flow - no special flags needed. They are automatically detected and formatted with distinctive styling in Markdown, HTML, and JSON outputs.
+
 ### Combined Examples
 
 ```bash
@@ -579,6 +636,24 @@ claude-extract --project 1 --all      # Extract from project #1
 claude-extract --project 1,3 --all    # Extract from multiple projects
 ```
 
+### How are Claude's plans extracted?
+Plans are automatically detected and formatted when you export any conversation. When Claude creates an implementation plan (using `/plan` mode), the approved plan appears in your export with:
+- A distinctive `## 📋 Approved Plan` header
+- The plan title in bold
+- The path where the plan was saved
+- The full plan content (Executive Summary, steps, etc.)
+
+No special flags needed - plans are extracted automatically.
+
+### How are user questions and answers extracted?
+When Claude asks you questions using the AskUserQuestion tool (the interactive prompts you see during conversations), these Q&A pairs are automatically captured and formatted:
+- `## ❓ User Questions & Answers` header
+- Each question's category/header
+- The question text
+- Your selected answer
+
+This preserves the decision points in your conversations.
+
 ### Where does Claude Code store conversations?
 Claude Code saves all chats in `~/.claude/projects/` as JSONL files. There's no built-in export feature - that's why this tool exists.
 
@@ -616,6 +691,8 @@ No, this is an independent open-source tool. It reads the local Claude Code file
 | Organize by project | `--by-project` flag | Manual | N/A |
 | Incremental export | Default (skips existing) | N/A | N/A |
 | Extract bash commands | `--bash-commands` flag | N/A | N/A |
+| Extract plans | Auto-detected | Manual | N/A |
+| Extract Q&A pairs | Auto-detected | Manual | N/A |
 | Multiple formats | MD, JSON, HTML | Text only | N/A |
 | Zero configuration | Auto-detects | Manual process | N/A |
 | Cross-platform | Win/Mac/Linux | Manual works | N/A |
@@ -629,9 +706,24 @@ No, this is an independent open-source tool. It reads the local Claude Code file
 1. **Locates Claude Code logs**: Scans ~/.claude/projects for JSONL files
 2. **Parses undocumented format**: Handles Claude's internal data structure
 3. **Extracts conversations**: Preserves user inputs and Claude responses
-4. **Converts to Markdown/JSON/HTML**: Clean format without terminal escape codes
-5. **Organizes output**: Optional date and project folder structure
-6. **Enables search**: Indexes content for instant searching
+4. **Detects special content**: Identifies plans (`📋`) and Q&A pairs (`❓`) automatically
+5. **Converts to Markdown/JSON/HTML**: Clean format without terminal escape codes
+6. **Organizes output**: Optional date and project folder structure
+7. **Enables search**: Indexes content for instant searching
+
+### Content Types Extracted
+
+| Type | Description | Format |
+|------|-------------|--------|
+| **User Messages** | Your inputs to Claude | `## 👤 User` |
+| **Assistant Messages** | Claude's responses | `## 🤖 Claude` |
+| **Plans** | Approved implementation plans | `## 📋 Approved Plan` |
+| **Q&A Pairs** | Interactive questions and answers | `## ❓ User Questions & Answers` |
+| **Tool Use** | Tool invocations (detailed mode) | `### 🔧 Tool Use` |
+| **Tool Results** | Tool outputs (detailed mode) | `### 📤 Tool Result` |
+| **System** | System messages (detailed mode) | `### ℹ️ System` |
+
+For detailed technical documentation, see [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md).
 
 ### Requirements
 - Python 3.8+ (works with 3.9, 3.10, 3.11, 3.12)
@@ -717,13 +809,14 @@ See [INSTALL.md](docs/user/INSTALL.md) for:
 - [x] Extract bash commands only (`--bash-commands`)
 - [x] Date range filtering (`--from-date`, `--to-date`)
 - [x] Project selection (`--list-projects`, `--project`)
+- [x] **Extract approved plans** - Auto-detect and format Claude's implementation plans
+- [x] **Extract Q&A pairs** - Capture AskUserQuestion interactions and user answers
 
 ### Planned Features
 - [ ] Export to PDF format
 - [ ] Automated daily backups of Claude conversations
 - [ ] Integration with Obsidian, Notion, Roam
 - [ ] Watch mode for auto-export of new conversations
-- [ ] Filter by date range (--after, --before flags)
 - [ ] Export statistics and analytics dashboard
 
 ---
@@ -746,6 +839,6 @@ If this tool helps you export Claude Code conversations:
 
 ---
 
-**Keywords**: export claude code conversations, claude conversation extractor, claude code export tool, backup claude code logs, save claude chat history, claude jsonl to markdown, ~/.claude/projects, extract claude sessions, claude code no export button, where are claude code logs stored, claude terminal logs, anthropic claude code export
+**Keywords**: export claude code conversations, claude conversation extractor, claude code export tool, backup claude code logs, save claude chat history, claude jsonl to markdown, ~/.claude/projects, extract claude sessions, claude code no export button, where are claude code logs stored, claude terminal logs, anthropic claude code export, extract claude plans, extract claude qa, claude implementation plans
 
 **Note**: This is an independent tool for exporting Claude Code conversations. Not affiliated with Anthropic.
