@@ -171,13 +171,38 @@ class ClaudeConversationExtractor:
                                 text = self._extract_text_content(content)
 
                                 if text and text.strip():
-                                    conversation.append(
-                                        {
-                                            "role": "user",
-                                            "content": text,
-                                            "timestamp": entry.get("timestamp", ""),
-                                        }
-                                    )
+                                    # Check if this message contains a plan approval
+                                    # (plan approvals can appear in user messages as system feedback)
+                                    if self._contains_plan_approval(text):
+                                        plan = self._parse_plan_content(text)
+                                        if plan:
+                                            conversation.append(
+                                                {
+                                                    "role": "plan",
+                                                    "content": text,
+                                                    "plan_title": plan["title"],
+                                                    "plan_path": plan["path"],
+                                                    "plan_content": plan["content"],
+                                                    "timestamp": entry.get("timestamp", ""),
+                                                }
+                                            )
+                                        else:
+                                            # Plan detected but couldn't parse - add as user
+                                            conversation.append(
+                                                {
+                                                    "role": "user",
+                                                    "content": text,
+                                                    "timestamp": entry.get("timestamp", ""),
+                                                }
+                                            )
+                                    else:
+                                        conversation.append(
+                                            {
+                                                "role": "user",
+                                                "content": text,
+                                                "timestamp": entry.get("timestamp", ""),
+                                            }
+                                        )
 
                         # Extract assistant messages
                         elif entry.get("type") == "assistant" and "message" in entry:
@@ -187,13 +212,37 @@ class ClaudeConversationExtractor:
                                 text = self._extract_text_content(content, detailed=detailed)
 
                                 if text and text.strip():
-                                    conversation.append(
-                                        {
-                                            "role": "assistant",
-                                            "content": text,
-                                            "timestamp": entry.get("timestamp", ""),
-                                        }
-                                    )
+                                    # Check if this message contains a plan approval
+                                    if self._contains_plan_approval(text):
+                                        plan = self._parse_plan_content(text)
+                                        if plan:
+                                            conversation.append(
+                                                {
+                                                    "role": "plan",
+                                                    "content": text,
+                                                    "plan_title": plan["title"],
+                                                    "plan_path": plan["path"],
+                                                    "plan_content": plan["content"],
+                                                    "timestamp": entry.get("timestamp", ""),
+                                                }
+                                            )
+                                        else:
+                                            # Plan detected but couldn't parse - add as assistant
+                                            conversation.append(
+                                                {
+                                                    "role": "assistant",
+                                                    "content": text,
+                                                    "timestamp": entry.get("timestamp", ""),
+                                                }
+                                            )
+                                    else:
+                                        conversation.append(
+                                            {
+                                                "role": "assistant",
+                                                "content": text,
+                                                "timestamp": entry.get("timestamp", ""),
+                                            }
+                                        )
                         
                         # Include tool use and system messages if detailed mode
                         elif detailed:
@@ -412,6 +461,94 @@ class ClaudeConversationExtractor:
             return "\n".join(text_parts)
         else:
             return str(content)
+
+    def _contains_plan_approval(self, text: str) -> bool:
+        """Check if text contains a plan approval section.
+
+        Detects Claude's plan approval format with patterns like:
+        - "⏺ User approved Claude's plan"
+        - "Plan saved to: ~/.claude/plans/"
+        """
+        import re
+        patterns = [
+            r"⏺\s*User approved Claude's plan",
+            r"Plan saved to:\s*~[/\\]\.claude[/\\]plans[/\\]",
+        ]
+        return any(re.search(pattern, text) for pattern in patterns)
+
+    def _parse_plan_content(self, text: str) -> Optional[Dict]:
+        """Parse plan title, path, and content from approval text.
+
+        Expected format:
+        ⏺ User approved Claude's plan
+          ⎿  Plan saved to: ~/.claude/plans/xxx.md · /plan to edit
+             Plan Title Here
+
+             Executive Summary
+             ...content...
+
+        Returns dict with title, path, content or None if parsing fails.
+        """
+        import re
+
+        # Extract path: ~/.claude/plans/xxx.md
+        path_match = re.search(
+            r"Plan saved to:\s*(~[/\\]\.claude[/\\]plans[/\\][^\s·]+\.md)",
+            text
+        )
+        if not path_match:
+            return None
+
+        path = path_match.group(1)
+
+        # Find the plan content after the path line
+        path_line_end = text.find(path) + len(path)
+        remaining = text[path_line_end:].strip()
+
+        # Skip any "· /plan to edit" suffix and get to the content
+        if remaining.startswith("·"):
+            # Find the next newline
+            newline_pos = remaining.find("\n")
+            if newline_pos != -1:
+                remaining = remaining[newline_pos + 1:]
+            else:
+                remaining = ""
+
+        remaining = remaining.strip()
+
+        if not remaining:
+            return None
+
+        # First non-empty line is typically the title
+        lines = remaining.split("\n")
+        title = ""
+        content_start = 0
+
+        for i, line in enumerate(lines):
+            # Strip leading whitespace but preserve it for content
+            stripped = line.strip()
+            if stripped:
+                title = stripped
+                content_start = i + 1
+                break
+
+        # Rest is the content - preserve structure but normalize indentation
+        content_lines = lines[content_start:]
+        # Find minimum indentation to normalize
+        non_empty_lines = [l for l in content_lines if l.strip()]
+        if non_empty_lines:
+            min_indent = min(len(l) - len(l.lstrip()) for l in non_empty_lines)
+            content_lines = [
+                l[min_indent:] if len(l) >= min_indent else l
+                for l in content_lines
+            ]
+        content = "\n".join(content_lines).strip()
+
+        return {
+            "title": title,
+            "path": path,
+            "content": content,
+        }
 
     def display_conversation(self, jsonl_path: Path, detailed: bool = False) -> None:
         """Display a conversation in the terminal with pagination.
@@ -660,6 +797,17 @@ class ClaudeConversationExtractor:
                 elif role == "system":
                     f.write("### ℹ️ System\n\n")
                     f.write(f"{content}\n\n")
+                elif role == "plan":
+                    f.write("## 📋 Approved Plan\n\n")
+                    plan_title = msg.get("plan_title", "Untitled Plan")
+                    plan_path = msg.get("plan_path", "")
+                    plan_content = msg.get("plan_content", "")
+                    f.write(f"**{plan_title}**\n\n")
+                    if plan_path:
+                        f.write(f"*Saved to: `{plan_path}`*\n\n")
+                    if plan_content:
+                        f.write("---\n\n")
+                        f.write(f"{plan_content}\n\n")
                 else:
                     f.write(f"## {role}\n\n")
                     f.write(f"{content}\n\n")
@@ -806,6 +954,27 @@ class ClaudeConversationExtractor:
             border-left: 4px solid #95a5a6;
             background: #f8f9fa;
         }}
+        .plan {{
+            border-left: 4px solid #9b59b6;
+            background: #f9f5ff;
+        }}
+        .plan-title {{
+            font-size: 1.1em;
+            font-weight: bold;
+            color: #9b59b6;
+            margin-bottom: 5px;
+        }}
+        .plan-path {{
+            font-size: 0.85em;
+            color: #666;
+            font-style: italic;
+            margin-bottom: 10px;
+        }}
+        .plan-content {{
+            border-top: 1px solid #e0d4f0;
+            padding-top: 10px;
+            margin-top: 10px;
+        }}
         .role {{
             font-weight: bold;
             margin-bottom: 10px;
@@ -858,12 +1027,30 @@ class ClaudeConversationExtractor:
                     "assistant": "🤖 Claude",
                     "tool_use": "🔧 Tool Use",
                     "tool_result": "📤 Tool Result",
-                    "system": "ℹ️ System"
+                    "system": "ℹ️ System",
+                    "plan": "📋 Approved Plan"
                 }.get(role, role)
-                
+
                 f.write(f'    <div class="message {role}">\n')
                 f.write(f'        <div class="role">{role_display}</div>\n')
-                f.write(f'        <div class="content">{content}</div>\n')
+
+                # Special handling for plan messages
+                if role == "plan":
+                    plan_title = msg.get("plan_title", "Untitled Plan")
+                    plan_path = msg.get("plan_path", "")
+                    plan_content = msg.get("plan_content", "")
+                    # Escape HTML in plan content
+                    plan_title = plan_title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                    plan_content = plan_content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+                    f.write(f'        <div class="plan-title">{plan_title}</div>\n')
+                    if plan_path:
+                        f.write(f'        <div class="plan-path">Saved to: {plan_path}</div>\n')
+                    if plan_content:
+                        f.write(f'        <div class="plan-content">{plan_content}</div>\n')
+                else:
+                    f.write(f'        <div class="content">{content}</div>\n')
+
                 f.write(f'    </div>\n')
             
             f.write("\n</body>\n</html>")
