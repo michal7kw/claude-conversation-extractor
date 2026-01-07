@@ -848,8 +848,8 @@ class ClaudeConversationExtractor:
 
             for msg in conversation:
                 role = msg["role"]
-                content = msg["content"]
-                
+                content = msg.get("content", "")  # Q&A entries may not have content
+
                 if role == "user":
                     f.write("## 👤 User\n\n")
                     f.write(f"{content}\n\n")
@@ -1116,8 +1116,8 @@ class ClaudeConversationExtractor:
             
             for msg in conversation:
                 role = msg["role"]
-                content = msg["content"]
-                
+                content = msg.get("content", "")  # Q&A entries may not have content
+
                 # Escape HTML
                 content = content.replace("&", "&amp;")
                 content = content.replace("<", "&lt;")
