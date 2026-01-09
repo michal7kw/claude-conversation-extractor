@@ -2,7 +2,7 @@
 
 run
 ```
-claude-extract --overwrite --from-date 2025-12-17 --by-project --by-day --all --output .
+claude-extract --overwrite --from-date 2026-01-01 --by-project --by-day --all --output .
 ```
 
 
@@ -445,7 +445,9 @@ npm install
 
 ### Automatic Plan & Q&A Extraction
 
-Plans and Q&A pairs are automatically extracted and formatted in all exports:
+Plans and Q&A pairs are automatically extracted and formatted in all exports. Plans are detected using two methods:
+1. **Text pattern**: "User approved Claude's plan" approval messages
+2. **ExitPlanMode tool**: Claude's tool call when completing plan mode
 
 ```bash
 # Plans are automatically detected when you export

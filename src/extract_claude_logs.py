@@ -233,6 +233,21 @@ class ClaudeConversationExtractor:
                                 if qa_data:
                                     pending_questions[qa_data["tool_use_id"]] = qa_data["questions"]
 
+                                # Check for ExitPlanMode tool (plan completion)
+                                exit_plan = self._extract_plan_from_exit_tool(entry)
+                                if exit_plan:
+                                    conversation.append(
+                                        {
+                                            "role": "plan",
+                                            "content": exit_plan["content"],
+                                            "plan_title": exit_plan["title"],
+                                            "plan_path": exit_plan["path"],
+                                            "plan_content": exit_plan["content"],
+                                            "timestamp": entry.get("timestamp", ""),
+                                        }
+                                    )
+                                    continue  # Skip normal text processing for this entry
+
                                 text = self._extract_text_content(content, detailed=detailed)
 
                                 if text and text.strip():
@@ -616,6 +631,46 @@ class ClaudeConversationExtractor:
                         "tool_use_id": tool_use_id,
                         "answers": answers
                     }
+        return None
+
+    def _extract_plan_from_exit_tool(self, entry: dict) -> Optional[Dict]:
+        """Extract plan data from ExitPlanMode tool usage.
+
+        Claude uses ExitPlanMode tool when completing a plan, with the plan
+        content in input.plan and the plan filename in entry's slug field.
+
+        Returns dict with title, path, and content, or None if not found.
+        """
+        content = entry.get("message", {}).get("content", [])
+        if not isinstance(content, list):
+            return None
+
+        for item in content:
+            if isinstance(item, dict):
+                if item.get("type") == "tool_use" and item.get("name") == "ExitPlanMode":
+                    plan_content = item.get("input", {}).get("plan", "")
+                    if plan_content:
+                        # Get slug from entry (plan filename)
+                        slug = entry.get("slug", "")
+                        path = f"~/.claude/plans/{slug}.md" if slug else "~/.claude/plans/unknown.md"
+
+                        # Extract title from first markdown heading or first line
+                        lines = plan_content.strip().split("\n")
+                        title = "Untitled Plan"
+                        for line in lines:
+                            line = line.strip()
+                            if line.startswith("# "):
+                                title = line[2:].strip()
+                                break
+                            elif line and not line.startswith("#"):
+                                title = line[:100]
+                                break
+
+                        return {
+                            "title": title,
+                            "path": path,
+                            "content": plan_content,
+                        }
         return None
 
     def display_conversation(self, jsonl_path: Path, detailed: bool = False) -> None:

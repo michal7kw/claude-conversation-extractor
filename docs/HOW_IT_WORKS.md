@@ -395,6 +395,78 @@ Extracted plans are stored as:
 }
 ```
 
+### ExitPlanMode Tool Detection
+
+Claude also uses the `ExitPlanMode` tool when completing a plan in plan mode. This is a separate detection method from the text-based approval pattern above.
+
+**When It Appears:**
+
+When Claude finishes creating a plan and exits plan mode, it calls the `ExitPlanMode` tool with the plan content. This appears in the JSONL as:
+
+```json
+{
+  "type": "assistant",
+  "slug": "toasty-greeting-donut",
+  "message": {
+    "content": [{
+      "type": "tool_use",
+      "id": "toolu_xyz789",
+      "name": "ExitPlanMode",
+      "input": {
+        "plan": "# Implementation Plan
+
+**Objective:** Fix breaking issues..."
+      }
+    }]
+  }
+}
+```
+
+**Key Fields:**
+- `slug`: The plan filename (without `.md` extension)
+- `input.plan`: The full plan content in markdown format
+
+**Detection Method:**
+
+The `_extract_plan_from_exit_tool()` method handles this:
+
+```python
+def _extract_plan_from_exit_tool(self, entry: dict) -> Optional[Dict]:
+    content = entry.get("message", {}).get("content", [])
+
+    for item in content:
+        if item.get("type") == "tool_use" and item.get("name") == "ExitPlanMode":
+            plan_content = item.get("input", {}).get("plan", "")
+            if plan_content:
+                slug = entry.get("slug", "")
+                path = f"~/.claude/plans/{slug}.md"
+
+                # Extract title from first markdown heading
+                lines = plan_content.strip().split("
+")
+                title = "Untitled Plan"
+                for line in lines:
+                    if line.strip().startswith("# "):
+                        title = line.strip()[2:]
+                        break
+
+                return {"title": title, "path": path, "content": plan_content}
+    return None
+```
+
+### Two Detection Methods Compared
+
+| Aspect | Text Pattern | ExitPlanMode Tool |
+|--------|--------------|-------------------|
+| **Trigger** | "User approved Claude's plan" text | `ExitPlanMode` tool call |
+| **Plan Location** | Inline in message text | `input.plan` field |
+| **Path Source** | Parsed from "Plan saved to:" text | Constructed from `slug` field |
+| **Title Source** | First non-empty line after path | First `# ` heading in content |
+| **When Used** | Plan approval confirmation | Plan mode completion |
+
+Both methods produce the same output structure with `role: "plan"`.
+
+
 ---
 
 ## Q&A Extraction Deep Dive
