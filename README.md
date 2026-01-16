@@ -489,13 +489,23 @@ This plan covers the implementation of...
 
 **Q:** Which authentication method should we use?
 
-**A:** OAuth 2.0 (Recommended)
+**Choices:**
+- **✓ OAuth 2.0 (Recommended)** - Industry standard, supports SSO
+- JWT tokens - Simple, stateless authentication
+- Session-based - Traditional server-side sessions
+
+**Selected:** OAuth 2.0 (Recommended)
 
 ### Database choice
 
 **Q:** Which database should we use?
 
-**A:** PostgreSQL
+**Choices:**
+- **✓ PostgreSQL** - Full-featured, ACID compliant
+- MySQL - Popular, good performance
+- SQLite - Lightweight, embedded
+
+**Selected:** PostgreSQL
 ```
 
 **Note**: Plans and Q&A pairs appear inline in the conversation flow - no special flags needed. They are automatically detected and formatted with distinctive styling in Markdown, HTML, and JSON outputs.

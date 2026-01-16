@@ -9,9 +9,20 @@ readable markdown files.
 
 import argparse
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+# Tool categories for extraction
+TOOL_CATEGORIES = {
+    "file": ["Read", "Write", "Edit"],
+    "search": ["Grep", "Glob"],
+    "web": ["WebFetch", "WebSearch"],
+    "git": [],  # Git commands detected via Bash command content
+}
+
+ALL_EXTRACTABLE_TOOLS = ["Read", "Write", "Edit", "Grep", "Glob", "WebFetch", "WebSearch"]
 
 
 class ClaudeConversationExtractor:
@@ -474,6 +485,265 @@ class ClaudeConversationExtractor:
             print(f"❌ Error extracting bash commands from {jsonl_path}: {e}")
 
         return bash_commands
+
+    def _is_git_command(self, command: str) -> bool:
+        """Check if a bash command is a git operation."""
+        if not command:
+            return False
+        cmd = command.strip()
+        return cmd.startswith("git ") or cmd.startswith("git\t")
+
+    def extract_tool_operations(
+        self, jsonl_path: Path,
+        tool_filter: Optional[List[str]] = None,
+        detailed: bool = False
+    ) -> Dict[str, Dict[str, List[Dict]]]:
+        """Extract tool operations from a JSONL session file.
+
+        Args:
+            jsonl_path: Path to the JSONL file
+            tool_filter: Optional list of tool categories or tool names to include
+                        Categories: 'file', 'search', 'web', 'git'
+                        Tools: 'Read', 'Write', 'Edit', 'Grep', 'Glob', 'WebFetch', 'WebSearch'
+            detailed: If True, include full tool results instead of summaries
+
+        Returns:
+            Dictionary with structure:
+            {
+                "file": {"Read": [...], "Write": [...], "Edit": [...]},
+                "search": {"Grep": [...], "Glob": [...]},
+                "web": {"WebFetch": [...], "WebSearch": [...]},
+                "git": [...]  # Git commands from Bash
+            }
+        """
+        tool_ops: Dict[str, Dict[str, List[Dict]]] = {
+            "file": {"Read": [], "Write": [], "Edit": []},
+            "search": {"Grep": [], "Glob": []},
+            "web": {"WebFetch": [], "WebSearch": []},
+            "git": [],
+        }
+
+        # Determine which tools to extract based on filter
+        extract_categories = set()
+        extract_tools = set()
+
+        if tool_filter:
+            for item in tool_filter:
+                item_lower = item.lower()
+                if item_lower in TOOL_CATEGORIES:
+                    extract_categories.add(item_lower)
+                    extract_tools.update(TOOL_CATEGORIES[item_lower])
+                elif item in ALL_EXTRACTABLE_TOOLS:
+                    extract_tools.add(item)
+                elif item.lower() == "git":
+                    extract_categories.add("git")
+        else:
+            # Extract all tools if no filter
+            extract_categories = {"file", "search", "web", "git"}
+            extract_tools = set(ALL_EXTRACTABLE_TOOLS)
+
+        try:
+            entries = []
+            with open(jsonl_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        entry = json.loads(line.strip())
+                        entries.append(entry)
+                    except json.JSONDecodeError:
+                        continue
+
+            current_context = []
+            pending_tool_ops = {}  # tool_use_id -> tool_op_data
+
+            for entry in entries:
+                entry_type = entry.get("type", "")
+
+                # Collect assistant text as context
+                if entry_type == "assistant" and "message" in entry:
+                    msg = entry["message"]
+                    if isinstance(msg, dict) and msg.get("role") == "assistant":
+                        content = msg.get("content", [])
+
+                        if isinstance(content, list):
+                            for item in content:
+                                if isinstance(item, dict):
+                                    if item.get("type") == "text":
+                                        text = item.get("text", "").strip()
+                                        if text:
+                                            current_context.append(text)
+                                    elif item.get("type") == "tool_use":
+                                        tool_name = item.get("name", "")
+                                        tool_input = item.get("input", {})
+                                        tool_use_id = item.get("id", "")
+
+                                        # Check if this is a tool we want to extract
+                                        if tool_name in extract_tools:
+                                            pending_tool_ops[tool_use_id] = {
+                                                "tool_name": tool_name,
+                                                "context": "\n\n".join(current_context),
+                                                "timestamp": entry.get("timestamp", ""),
+                                                "tool_use_id": tool_use_id,
+                                                "input": tool_input,
+                                            }
+                                            current_context = []
+
+                                        # Check for git commands via Bash
+                                        elif tool_name == "Bash" and "git" in extract_categories:
+                                            command = tool_input.get("command", "")
+                                            if self._is_git_command(command):
+                                                pending_tool_ops[tool_use_id] = {
+                                                    "tool_name": "Bash",
+                                                    "is_git": True,
+                                                    "context": "\n\n".join(current_context),
+                                                    "timestamp": entry.get("timestamp", ""),
+                                                    "tool_use_id": tool_use_id,
+                                                    "input": tool_input,
+                                                }
+                                                current_context = []
+
+                        elif isinstance(content, str) and content.strip():
+                            current_context.append(content.strip())
+
+                # Handle standalone tool_use entries
+                elif entry_type == "tool_use":
+                    tool_data = entry.get("tool", {})
+                    tool_name = tool_data.get("name", "")
+                    tool_input = tool_data.get("input", {})
+                    tool_use_id = entry.get("tool_use_id", "") or entry.get("id", "")
+
+                    if tool_name in extract_tools:
+                        pending_tool_ops[tool_use_id] = {
+                            "tool_name": tool_name,
+                            "context": "\n\n".join(current_context),
+                            "timestamp": entry.get("timestamp", ""),
+                            "tool_use_id": tool_use_id,
+                            "input": tool_input,
+                        }
+                        current_context = []
+                    elif tool_name == "Bash" and "git" in extract_categories:
+                        command = tool_input.get("command", "")
+                        if self._is_git_command(command):
+                            pending_tool_ops[tool_use_id] = {
+                                "tool_name": "Bash",
+                                "is_git": True,
+                                "context": "\n\n".join(current_context),
+                                "timestamp": entry.get("timestamp", ""),
+                                "tool_use_id": tool_use_id,
+                                "input": tool_input,
+                            }
+                            current_context = []
+
+                # Match tool_result entries with pending tool operations
+                elif entry_type == "tool_result":
+                    tool_use_id = entry.get("tool_use_id", "")
+                    result = entry.get("result", {})
+
+                    if tool_use_id in pending_tool_ops:
+                        tool_op = pending_tool_ops.pop(tool_use_id)
+                        tool_name = tool_op["tool_name"]
+
+                        # Summarize or include full result based on detailed flag
+                        tool_op["result"] = self._summarize_tool_result(
+                            tool_name, result, tool_op.get("input", {}), detailed
+                        )
+
+                        # Categorize the tool operation
+                        if tool_op.get("is_git"):
+                            tool_ops["git"].append(tool_op)
+                        elif tool_name in TOOL_CATEGORIES["file"]:
+                            tool_ops["file"][tool_name].append(tool_op)
+                        elif tool_name in TOOL_CATEGORIES["search"]:
+                            tool_ops["search"][tool_name].append(tool_op)
+                        elif tool_name in TOOL_CATEGORIES["web"]:
+                            tool_ops["web"][tool_name].append(tool_op)
+
+                # Reset context on user messages
+                elif entry_type == "user":
+                    current_context = []
+
+            # Handle any pending tool operations without results
+            for tool_use_id, tool_op in pending_tool_ops.items():
+                tool_name = tool_op["tool_name"]
+                tool_op["result"] = {"status": "no_result"}
+
+                if tool_op.get("is_git"):
+                    tool_ops["git"].append(tool_op)
+                elif tool_name in TOOL_CATEGORIES["file"]:
+                    tool_ops["file"][tool_name].append(tool_op)
+                elif tool_name in TOOL_CATEGORIES["search"]:
+                    tool_ops["search"][tool_name].append(tool_op)
+                elif tool_name in TOOL_CATEGORIES["web"]:
+                    tool_ops["web"][tool_name].append(tool_op)
+
+        except Exception as e:
+            print(f"❌ Error extracting tool operations from {jsonl_path}: {e}")
+
+        return tool_ops
+
+    def _summarize_tool_result(
+        self, tool_name: str, result: dict, tool_input: dict, detailed: bool = False
+    ) -> Dict:
+        """Create a summary of tool result based on tool type.
+
+        Args:
+            tool_name: Name of the tool
+            result: Raw result from tool_result entry
+            tool_input: Tool input parameters
+            detailed: If True, include full content
+        """
+        output = result.get("output", "")
+        error = result.get("error")
+
+        summary = {
+            "success": not bool(error),
+            "error": error,
+        }
+
+        if tool_name == "Read":
+            if detailed:
+                summary["content"] = output
+            else:
+                # Count lines and estimate size
+                lines = output.count("\n") + 1 if output else 0
+                size = len(output.encode("utf-8")) if output else 0
+                summary["lines"] = lines
+                summary["size_bytes"] = size
+
+        elif tool_name in ["Write", "Edit"]:
+            if detailed:
+                summary["content"] = output
+            else:
+                summary["status"] = "Success" if not error else "Failed"
+
+        elif tool_name in ["Grep", "Glob"]:
+            if detailed:
+                summary["output"] = output
+            else:
+                # Try to count matched files
+                if output:
+                    lines = [l for l in output.split("\n") if l.strip()]
+                    summary["matched_count"] = len(lines)
+                    summary["matches_preview"] = lines[:5] if lines else []
+                else:
+                    summary["matched_count"] = 0
+                    summary["matches_preview"] = []
+
+        elif tool_name in ["WebFetch", "WebSearch"]:
+            if detailed:
+                summary["output"] = output
+            else:
+                # Truncate for preview
+                summary["preview"] = output[:500] + "..." if len(output) > 500 else output
+
+        elif tool_name == "Bash":
+            # Git command
+            if detailed:
+                summary["output"] = output
+            else:
+                # Truncate output for preview
+                summary["output_preview"] = output[:300] + "..." if len(output) > 300 else output
+
+        return summary
 
     def _extract_text_content(self, content, detailed: bool = False) -> str:
         """Extract text from various content formats Claude uses.
@@ -938,11 +1208,28 @@ class ClaudeConversationExtractor:
                     for q in questions:
                         question_text = q.get("question", "")
                         header = q.get("header", "")
+                        options = q.get("options", [])
+                        multi_select = q.get("multiSelect", False)
                         answer = answers.get(question_text, "No answer")
                         if header:
                             f.write(f"### {header}\n\n")
                         f.write(f"**Q:** {question_text}\n\n")
-                        f.write(f"**A:** {answer}\n\n")
+                        # Show all available choices
+                        if options:
+                            f.write("**Choices:**\n")
+                            for opt in options:
+                                label = opt.get("label", "")
+                                description = opt.get("description", "")
+                                # Mark selected answer(s)
+                                if label == answer or (isinstance(answer, list) and label in answer):
+                                    f.write(f"- **✓ {label}**")
+                                else:
+                                    f.write(f"- {label}")
+                                if description:
+                                    f.write(f" - {description}")
+                                f.write("\n")
+                            f.write("\n")
+                        f.write(f"**Selected:** {answer}\n\n")
                 else:
                     f.write(f"## {role}\n\n")
                     f.write(f"{content}\n\n")
@@ -1131,6 +1418,23 @@ class ClaudeConversationExtractor:
             margin-left: 20px;
             margin-bottom: 15px;
         }}
+        .qa-choices {{
+            margin: 10px 0 10px 20px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 4px;
+        }}
+        .qa-choices ul {{
+            margin: 5px 0 0 20px;
+            padding: 0;
+        }}
+        .qa-choices li {{
+            margin: 5px 0;
+            color: #555;
+        }}
+        .qa-choices li strong {{
+            color: #27ae60;
+        }}
         .role {{
             font-weight: bold;
             margin-bottom: 10px;
@@ -1212,15 +1516,32 @@ class ClaudeConversationExtractor:
                     for q in questions:
                         question_text = q.get("question", "")
                         header = q.get("header", "")
+                        options = q.get("options", [])
                         answer = answers.get(question_text, "No answer")
                         # Escape HTML
                         question_text = question_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                        answer = str(answer).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                        answer_str = str(answer).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                         header = header.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                         if header:
                             f.write(f'        <div class="qa-header">{header}</div>\n')
                         f.write(f'        <div class="qa-question">Q: {question_text}</div>\n')
-                        f.write(f'        <div class="qa-answer">A: {answer}</div>\n')
+                        # Show all available choices
+                        if options:
+                            f.write('        <div class="qa-choices"><strong>Choices:</strong><ul>\n')
+                            for opt in options:
+                                label = opt.get("label", "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                                description = opt.get("description", "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                                # Mark selected answer(s)
+                                is_selected = label == answer or (isinstance(answer, list) and label in answer)
+                                if is_selected:
+                                    f.write(f'            <li><strong>✓ {label}</strong>')
+                                else:
+                                    f.write(f'            <li>{label}')
+                                if description:
+                                    f.write(f' - <em>{description}</em>')
+                                f.write('</li>\n')
+                            f.write('        </ul></div>\n')
+                        f.write(f'        <div class="qa-answer">Selected: {answer_str}</div>\n')
                 else:
                     f.write(f'        <div class="content">{content}</div>\n')
 
@@ -1290,6 +1611,246 @@ class ClaudeConversationExtractor:
 
                 # Add separator between commands (except for the last one)
                 if i < len(bash_commands):
+                    f.write("---\n\n")
+
+        return output_path
+
+    def save_tool_operations_as_markdown(
+        self, tool_ops: Dict, session_id: str,
+        by_day: bool = False, by_project: bool = False, project_name: Optional[str] = None
+    ) -> Optional[Path]:
+        """Save extracted tool operations as a markdown file.
+
+        Args:
+            tool_ops: Dictionary of tool operations by category
+            session_id: Session identifier
+            by_day: If True, save to a date-based subdirectory (YYYY-MM-DD)
+            by_project: If True, save to a project-based subdirectory
+            project_name: Name of the project (extracted from session path)
+        """
+        # Count total operations
+        total_ops = 0
+        category_counts = {}
+
+        for category, data in tool_ops.items():
+            if category == "git":
+                count = len(data) if isinstance(data, list) else 0
+                category_counts["git"] = count
+                total_ops += count
+            else:
+                cat_count = 0
+                tool_counts = {}
+                for tool_name, ops_list in data.items():
+                    tool_counts[tool_name] = len(ops_list)
+                    cat_count += len(ops_list)
+                category_counts[category] = {"total": cat_count, "tools": tool_counts}
+                total_ops += cat_count
+
+        if total_ops == 0:
+            return None
+
+        # Get timestamp from first operation
+        first_timestamp = None
+        for category, data in tool_ops.items():
+            if category == "git" and data:
+                first_timestamp = data[0].get("timestamp", "")
+                break
+            elif isinstance(data, dict):
+                for tool_name, ops_list in data.items():
+                    if ops_list:
+                        first_timestamp = ops_list[0].get("timestamp", "")
+                        break
+                if first_timestamp:
+                    break
+
+        if first_timestamp:
+            try:
+                dt = datetime.fromisoformat(first_timestamp.replace("Z", "+00:00"))
+                date_str = dt.strftime("%Y-%m-%d")
+                time_str = dt.strftime("%H:%M:%S")
+            except Exception:
+                date_str = datetime.now().strftime("%Y-%m-%d")
+                time_str = ""
+        else:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+            time_str = ""
+
+        filename = f"tool-operations-{date_str}-{session_id[:8]}.md"
+
+        # Determine output directory
+        output_dir = self._get_output_dir(date_str, by_day, by_project, project_name)
+        output_path = output_dir / filename
+
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write("# Tool Operations Log\n\n")
+            f.write(f"Session ID: {session_id}\n")
+            f.write(f"Date: {date_str}")
+            if time_str:
+                f.write(f" {time_str}")
+            f.write("\n")
+            if project_name:
+                f.write(f"Project: {project_name}\n")
+            f.write("\n")
+
+            # Write summary
+            f.write("## Summary\n\n")
+            f.write(f"Total operations: {total_ops}\n\n")
+
+            # File operations
+            if "file" in category_counts and category_counts["file"]["total"] > 0:
+                tools_str = ", ".join(
+                    f"{t}: {c}" for t, c in category_counts["file"]["tools"].items() if c > 0
+                )
+                f.write(f"- File Operations: {category_counts['file']['total']} ({tools_str})\n")
+
+            # Search operations
+            if "search" in category_counts and category_counts["search"]["total"] > 0:
+                tools_str = ", ".join(
+                    f"{t}: {c}" for t, c in category_counts["search"]["tools"].items() if c > 0
+                )
+                f.write(f"- Search Operations: {category_counts['search']['total']} ({tools_str})\n")
+
+            # Web operations
+            if "web" in category_counts and category_counts["web"]["total"] > 0:
+                tools_str = ", ".join(
+                    f"{t}: {c}" for t, c in category_counts["web"]["tools"].items() if c > 0
+                )
+                f.write(f"- Web Operations: {category_counts['web']['total']} ({tools_str})\n")
+
+            # Git operations
+            if "git" in category_counts and category_counts["git"] > 0:
+                f.write(f"- Git Operations: {category_counts['git']}\n")
+
+            f.write("\n---\n\n")
+
+            # Write File Operations section
+            file_ops = tool_ops.get("file", {})
+            has_file_ops = any(ops for ops in file_ops.values())
+            if has_file_ops:
+                f.write("## File Operations\n\n")
+
+                for tool_name in ["Read", "Write", "Edit"]:
+                    ops_list = file_ops.get(tool_name, [])
+                    if ops_list:
+                        f.write(f"### {tool_name}\n\n")
+                        for i, op in enumerate(ops_list, 1):
+                            file_path = op.get("input", {}).get("file_path", "Unknown")
+                            f.write(f"#### {i}. `{file_path}`\n\n")
+
+                            context = op.get("context", "")
+                            if context:
+                                f.write(f"{context}\n\n")
+
+                            result = op.get("result", {})
+                            if tool_name == "Read":
+                                if "lines" in result:
+                                    f.write(f"- **Lines:** {result.get('lines', 0)}\n")
+                                size_kb = result.get("size_bytes", 0) / 1024
+                                f.write(f"- **Status:** {'Success' if result.get('success') else 'Failed'} ({size_kb:.1f} KB)\n")
+                            else:
+                                f.write(f"- **Status:** {result.get('status', 'Unknown')}\n")
+
+                            if result.get("error"):
+                                f.write(f"- **Error:** {result['error']}\n")
+
+                            f.write("\n---\n\n")
+
+            # Write Search Operations section
+            search_ops = tool_ops.get("search", {})
+            has_search_ops = any(ops for ops in search_ops.values())
+            if has_search_ops:
+                f.write("## Search Operations\n\n")
+
+                for tool_name in ["Grep", "Glob"]:
+                    ops_list = search_ops.get(tool_name, [])
+                    if ops_list:
+                        f.write(f"### {tool_name}\n\n")
+                        for i, op in enumerate(ops_list, 1):
+                            inp = op.get("input", {})
+                            pattern = inp.get("pattern", "")
+                            path = inp.get("path", ".")
+
+                            f.write(f"#### {i}. Pattern: `{pattern}`\n\n")
+
+                            context = op.get("context", "")
+                            if context:
+                                f.write(f"{context}\n\n")
+
+                            f.write(f"- **Path:** `{path}`\n")
+
+                            result = op.get("result", {})
+                            if "matched_count" in result:
+                                f.write(f"- **Matched:** {result['matched_count']} files\n")
+                                preview = result.get("matches_preview", [])
+                                if preview:
+                                    f.write("- **Preview:**\n")
+                                    for match in preview[:5]:
+                                        f.write(f"  - `{match}`\n")
+
+                            if result.get("error"):
+                                f.write(f"- **Error:** {result['error']}\n")
+
+                            f.write("\n---\n\n")
+
+            # Write Web Operations section
+            web_ops = tool_ops.get("web", {})
+            has_web_ops = any(ops for ops in web_ops.values())
+            if has_web_ops:
+                f.write("## Web Operations\n\n")
+
+                for tool_name in ["WebFetch", "WebSearch"]:
+                    ops_list = web_ops.get(tool_name, [])
+                    if ops_list:
+                        f.write(f"### {tool_name}\n\n")
+                        for i, op in enumerate(ops_list, 1):
+                            inp = op.get("input", {})
+
+                            if tool_name == "WebFetch":
+                                url = inp.get("url", "Unknown URL")
+                                f.write(f"#### {i}. URL: `{url}`\n\n")
+                            else:
+                                query = inp.get("query", "Unknown query")
+                                f.write(f'#### {i}. Query: "{query}"\n\n')
+
+                            context = op.get("context", "")
+                            if context:
+                                f.write(f"{context}\n\n")
+
+                            result = op.get("result", {})
+                            f.write(f"- **Status:** {'Success' if result.get('success') else 'Failed'}\n")
+
+                            preview = result.get("preview", "")
+                            if preview:
+                                f.write(f"- **Preview:** {preview[:200]}...\n")
+
+                            if result.get("error"):
+                                f.write(f"- **Error:** {result['error']}\n")
+
+                            f.write("\n---\n\n")
+
+            # Write Git Operations section
+            git_ops = tool_ops.get("git", [])
+            if git_ops:
+                f.write("## Git Operations\n\n")
+
+                for i, op in enumerate(git_ops, 1):
+                    command = op.get("input", {}).get("command", "")
+                    f.write(f"#### {i}. `{command}`\n\n")
+
+                    context = op.get("context", "")
+                    if context:
+                        f.write(f"{context}\n\n")
+
+                    result = op.get("result", {})
+                    output_preview = result.get("output_preview", "")
+                    if output_preview:
+                        f.write("```\n")
+                        f.write(f"{output_preview}\n")
+                        f.write("```\n\n")
+
+                    if result.get("error"):
+                        f.write(f"**Error:** {result['error']}\n\n")
+
                     f.write("---\n\n")
 
         return output_path
@@ -1628,6 +2189,92 @@ class ClaudeConversationExtractor:
 
         return success, total_commands
 
+    def extract_tool_operations_multiple(
+        self, sessions: List[Path], indices: List[int],
+        tool_filter: Optional[List[str]] = None,
+        detailed: bool = False,
+        by_day: bool = False, by_project: bool = False,
+        overwrite: bool = False
+    ) -> Tuple[int, int]:
+        """Extract tool operations from multiple sessions by index.
+
+        Args:
+            sessions: List of session paths
+            indices: Indices to extract
+            tool_filter: Optional list of tool categories or tool names to include
+            detailed: If True, include full tool results
+            by_day: If True, save to date-based subdirectories
+            by_project: If True, save to project-based subdirectories
+            overwrite: If True, overwrite existing files; if False (default), skip them
+
+        Returns:
+            Tuple of (successful_sessions, total_operations)
+        """
+        success = 0
+        skipped = 0
+        total = len(indices)
+        total_operations = 0
+
+        for idx in indices:
+            if 0 <= idx < len(sessions):
+                session_path = sessions[idx]
+
+                # Check if file exists and skip unless overwrite is set
+                if not overwrite:
+                    project_name = self._get_project_name(session_path) if by_project else None
+                    date_str = self._get_date_from_session(session_path)
+
+                    # Get the expected output file path
+                    output_dir = self._get_output_dir(
+                        date_str, by_day=by_day, by_project=by_project,
+                        project_name=project_name, create=False
+                    )
+                    output_file = output_dir / f"tool-operations-{date_str}-{session_path.stem[:8]}.md"
+
+                    if output_file.exists():
+                        skipped += 1
+                        try:
+                            rel_path = output_file.relative_to(self.output_dir)
+                        except ValueError:
+                            rel_path = output_file.name
+                        print(f"⏭️  Skipped: {rel_path} (already exists)")
+                        continue
+
+                tool_ops = self.extract_tool_operations(
+                    session_path, tool_filter=tool_filter, detailed=detailed
+                )
+
+                # Count operations
+                op_count = 0
+                for category, data in tool_ops.items():
+                    if category == "git":
+                        op_count += len(data) if isinstance(data, list) else 0
+                    else:
+                        for tool_name, ops_list in data.items():
+                            op_count += len(ops_list)
+
+                if op_count > 0:
+                    # Extract project name from path if needed
+                    project_name = self._get_project_name(session_path) if by_project else None
+
+                    output_path = self.save_tool_operations_as_markdown(
+                        tool_ops, session_path.stem,
+                        by_day=by_day, by_project=by_project, project_name=project_name
+                    )
+                    if output_path:
+                        success += 1
+                        total_operations += op_count
+                        print(
+                            f"✅ {success}/{total - skipped}: {output_path.name} "
+                            f"({op_count} operations)"
+                        )
+                else:
+                    print(f"⏭️  Skipped session {idx + 1} (no tool operations)")
+            else:
+                print(f"❌ Invalid session number: {idx + 1}")
+
+        return success, total_operations
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -1652,6 +2299,9 @@ Examples:
   %(prog)s --by-day --skip-existing --all  # skip already extracted dates
   %(prog)s --bash-commands --extract 1    # Extract bash commands from session 1
   %(prog)s --bash-commands --all          # Extract bash commands from all sessions
+  %(prog)s --tool-ops --all               # Extract all tool operations
+  %(prog)s --tool-ops --tool-filter file --all  # Extract only file operations
+  %(prog)s --tool-ops --tool-filter Grep,Glob --extract 1  # Extract search ops
   %(prog)s --overwrite --all              # Overwrite existing files
   %(prog)s --from-date 2025-01-01 --all   # Extract sessions from Jan 1, 2025
   %(prog)s --to-date 2025-01-31 --all     # Extract sessions up to Jan 31, 2025
@@ -1753,6 +2403,19 @@ Examples:
         "--bash-commands",
         action="store_true",
         help="Extract only successful bash commands with context (instead of full conversation)"
+    )
+    parser.add_argument(
+        "--tool-ops",
+        action="store_true",
+        help="Extract tool operations (Read, Write, Edit, Grep, Glob, WebFetch, WebSearch, Git)"
+    )
+    parser.add_argument(
+        "--tool-filter",
+        type=str,
+        help="Filter tool operations by category or name (comma-separated). "
+             "Categories: file, search, web, git. "
+             "Tools: Read, Write, Edit, Grep, Glob, WebFetch, WebSearch. "
+             "Example: --tool-filter file,Grep"
     )
     parser.add_argument(
         "--overwrite",
@@ -1984,6 +2647,32 @@ Examples:
                     overwrite=args.overwrite
                 )
                 print(f"\n✅ Successfully extracted {total_cmds} commands from {success} sessions")
+            elif args.tool_ops:
+                # Parse tool filter
+                tool_filter = None
+                if args.tool_filter:
+                    tool_filter = [t.strip() for t in args.tool_filter.split(",")]
+
+                print(f"\n📤 Extracting tool operations from {len(indices)} session(s)...")
+                if tool_filter:
+                    print(f"🔧 Filter: {', '.join(tool_filter)}")
+                if args.detailed:
+                    print("📋 Including detailed results")
+                if args.by_project:
+                    print("📂 Organizing by project folders")
+                if args.by_day:
+                    print("📅 Organizing by date folders")
+                if args.overwrite:
+                    print("🔄 Overwriting existing files")
+
+                success, total_ops = extractor.extract_tool_operations_multiple(
+                    sessions, indices,
+                    tool_filter=tool_filter,
+                    detailed=args.detailed,
+                    by_day=args.by_day, by_project=args.by_project,
+                    overwrite=args.overwrite
+                )
+                print(f"\n✅ Successfully extracted {total_ops} operations from {success} sessions")
             else:
                 print(f"\n📤 Extracting {len(indices)} session(s) as {args.format.upper()}...")
                 if args.detailed:
@@ -2035,6 +2724,34 @@ Examples:
                 overwrite=args.overwrite
             )
             print(f"\n✅ Successfully extracted {total_cmds} commands from {success} sessions")
+        elif args.tool_ops:
+            # Parse tool filter
+            tool_filter = None
+            if args.tool_filter:
+                tool_filter = [t.strip() for t in args.tool_filter.split(",")]
+
+            print(f"\n📤 Extracting tool operations from {limit} most recent sessions...")
+            if tool_filter:
+                print(f"🔧 Filter: {', '.join(tool_filter)}")
+            if args.detailed:
+                print("📋 Including detailed results")
+            if args.by_project:
+                print("📂 Organizing by project folders")
+            if args.by_day:
+                print("📅 Organizing by date folders")
+            if args.skip_existing:
+                print("⏭️  Skipping existing files")
+            if args.overwrite:
+                print("🔄 Overwriting existing files")
+
+            success, total_ops = extractor.extract_tool_operations_multiple(
+                sessions, indices,
+                tool_filter=tool_filter,
+                detailed=args.detailed,
+                by_day=args.by_day, by_project=args.by_project,
+                overwrite=args.overwrite
+            )
+            print(f"\n✅ Successfully extracted {total_ops} operations from {success} sessions")
         else:
             print(f"\n📤 Extracting {limit} most recent sessions as {args.format.upper()}...")
             if args.detailed:
@@ -2087,6 +2804,34 @@ Examples:
                 overwrite=args.overwrite
             )
             print(f"\n✅ Successfully extracted {total_cmds} commands from {success} sessions")
+        elif args.tool_ops:
+            # Parse tool filter
+            tool_filter = None
+            if args.tool_filter:
+                tool_filter = [t.strip() for t in args.tool_filter.split(",")]
+
+            print(f"\n📤 Extracting tool operations from {len(sessions)} sessions...")
+            if tool_filter:
+                print(f"🔧 Filter: {', '.join(tool_filter)}")
+            if args.detailed:
+                print("📋 Including detailed results")
+            if args.by_project:
+                print("📂 Organizing by project folders")
+            if args.by_day:
+                print("📅 Organizing by date folders")
+            if args.skip_existing:
+                print("⏭️  Skipping existing files")
+            if args.overwrite:
+                print("🔄 Overwriting existing files")
+
+            success, total_ops = extractor.extract_tool_operations_multiple(
+                sessions, indices,
+                tool_filter=tool_filter,
+                detailed=args.detailed,
+                by_day=args.by_day, by_project=args.by_project,
+                overwrite=args.overwrite
+            )
+            print(f"\n✅ Successfully extracted {total_ops} operations from {success} sessions")
         else:
             print(f"\n📤 Extracting {len(sessions)} sessions as {args.format.upper()}...")
             if args.detailed:

@@ -570,7 +570,11 @@ Extracted Q&A pairs are stored as:
         {
             "question": "How should plans be included?",
             "header": "Plan output",
-            "options": [...],
+            "options": [
+                {"label": "Embed inline", "description": "Include directly in conversation"},
+                {"label": "Separate files", "description": "Extract to separate markdown files"},
+                {"label": "Both", "description": "Include inline and also extract separately"}
+            ],
             "multiSelect": false
         }
     ],
@@ -579,6 +583,25 @@ Extracted Q&A pairs are stored as:
     },
     "timestamp": "2025-01-15T10:30:00.000Z"
 }
+```
+
+### Q&A Output Format
+
+In Markdown exports, Q&A pairs display all choices with the selected answer marked:
+
+```markdown
+## ❓ User Questions & Answers
+
+### Plan output
+
+**Q:** How should plans be included?
+
+**Choices:**
+- **✓ Embed inline** - Include directly in conversation
+- Separate files - Extract to separate markdown files
+- Both - Include inline and also extract separately
+
+**Selected:** Embed inline
 ```
 
 ---
