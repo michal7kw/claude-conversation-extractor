@@ -1149,15 +1149,15 @@ class ClaudeConversationExtractor:
                 # Parse ISO timestamp
                 dt = datetime.fromisoformat(first_timestamp.replace("Z", "+00:00"))
                 date_str = dt.strftime("%Y-%m-%d")
-                time_str = dt.strftime("%H:%M:%S")
+                time_str = dt.strftime("%H_%M")
             except Exception:
                 date_str = datetime.now().strftime("%Y-%m-%d")
-                time_str = ""
+                time_str = datetime.now().strftime("%H_%M")
         else:
             date_str = datetime.now().strftime("%Y-%m-%d")
-            time_str = ""
+            time_str = datetime.now().strftime("%H_%M")
 
-        filename = f"claude-conversation-{date_str}-{session_id[:8]}.md"
+        filename = f"{date_str}-{time_str}-{session_id[:8]}.md"
 
         # Determine output directory
         output_dir = self._get_output_dir(date_str, by_day, by_project, project_name)
@@ -1259,12 +1259,15 @@ class ClaudeConversationExtractor:
             try:
                 dt = datetime.fromisoformat(first_timestamp.replace("Z", "+00:00"))
                 date_str = dt.strftime("%Y-%m-%d")
+                time_str = dt.strftime("%H_%M")
             except Exception:
                 date_str = datetime.now().strftime("%Y-%m-%d")
+                time_str = datetime.now().strftime("%H_%M")
         else:
             date_str = datetime.now().strftime("%Y-%m-%d")
+            time_str = datetime.now().strftime("%H_%M")
 
-        filename = f"claude-conversation-{date_str}-{session_id[:8]}.json"
+        filename = f"{date_str}-{time_str}-{session_id[:8]}.json"
 
         # Determine output directory
         output_dir = self._get_output_dir(date_str, by_day, by_project, project_name)
@@ -1305,15 +1308,15 @@ class ClaudeConversationExtractor:
             try:
                 dt = datetime.fromisoformat(first_timestamp.replace("Z", "+00:00"))
                 date_str = dt.strftime("%Y-%m-%d")
-                time_str = dt.strftime("%H:%M:%S")
+                time_str = dt.strftime("%H_%M")
             except Exception:
                 date_str = datetime.now().strftime("%Y-%m-%d")
-                time_str = ""
+                time_str = datetime.now().strftime("%H_%M")
         else:
             date_str = datetime.now().strftime("%Y-%m-%d")
-            time_str = ""
+            time_str = datetime.now().strftime("%H_%M")
 
-        filename = f"claude-conversation-{date_str}-{session_id[:8]}.html"
+        filename = f"{date_str}-{time_str}-{session_id[:8]}.html"
 
         # Determine output directory
         output_dir = self._get_output_dir(date_str, by_day, by_project, project_name)
@@ -1573,15 +1576,15 @@ class ClaudeConversationExtractor:
             try:
                 dt = datetime.fromisoformat(first_timestamp.replace("Z", "+00:00"))
                 date_str = dt.strftime("%Y-%m-%d")
-                time_str = dt.strftime("%H:%M:%S")
+                time_str = dt.strftime("%H_%M")
             except Exception:
                 date_str = datetime.now().strftime("%Y-%m-%d")
-                time_str = ""
+                time_str = datetime.now().strftime("%H_%M")
         else:
             date_str = datetime.now().strftime("%Y-%m-%d")
-            time_str = ""
+            time_str = datetime.now().strftime("%H_%M")
 
-        filename = f"bash-commands-{date_str}-{session_id[:8]}.md"
+        filename = f"{date_str}-{time_str}-{session_id[:8]}-bash.md"
 
         # Determine output directory
         output_dir = self._get_output_dir(date_str, by_day, by_project, project_name)
@@ -1667,15 +1670,15 @@ class ClaudeConversationExtractor:
             try:
                 dt = datetime.fromisoformat(first_timestamp.replace("Z", "+00:00"))
                 date_str = dt.strftime("%Y-%m-%d")
-                time_str = dt.strftime("%H:%M:%S")
+                time_str = dt.strftime("%H_%M")
             except Exception:
                 date_str = datetime.now().strftime("%Y-%m-%d")
-                time_str = ""
+                time_str = datetime.now().strftime("%H_%M")
         else:
             date_str = datetime.now().strftime("%Y-%m-%d")
-            time_str = ""
+            time_str = datetime.now().strftime("%H_%M")
 
-        filename = f"tool-operations-{date_str}-{session_id[:8]}.md"
+        filename = f"{date_str}-{time_str}-{session_id[:8]}-tools.md"
 
         # Determine output directory
         output_dir = self._get_output_dir(date_str, by_day, by_project, project_name)
@@ -2033,6 +2036,9 @@ class ClaudeConversationExtractor:
     ) -> Path:
         """Get the full output file path without creating directories.
 
+        Since filenames include time (which we don't know without reading the file),
+        this method checks for any matching file using a glob pattern.
+
         Args:
             session_id: Session identifier
             date_str: Date string in YYYY-MM-DD format
@@ -2040,12 +2046,13 @@ class ClaudeConversationExtractor:
             by_day: If True, include date in path
             by_project: If True, include project name in path
             project_name: Name of the project
+
+        Returns:
+            Path to existing file if found, otherwise a placeholder path that won't exist
         """
         # Determine file extension
         ext_map = {"markdown": "md", "json": "json", "html": "html"}
         ext = ext_map.get(format, "md")
-
-        filename = f"claude-conversation-{date_str}-{session_id[:8]}.{ext}"
 
         # Get output directory (without creating it)
         output_dir = self._get_output_dir(
@@ -2053,7 +2060,16 @@ class ClaudeConversationExtractor:
             project_name=project_name, create=False
         )
 
-        return output_dir / filename
+        # Check for existing files matching the pattern (date-time-sessionid.ext)
+        # Pattern: YYYY-MM-DD-HH_MM-{session_id[:8]}.{ext}
+        pattern = f"{date_str}-*-{session_id[:8]}.{ext}"
+        if output_dir.exists():
+            matches = list(output_dir.glob(pattern))
+            if matches:
+                return matches[0]  # Return first match
+
+        # Return a placeholder path that won't exist
+        return output_dir / f"{date_str}-00_00-{session_id[:8]}.{ext}"
 
     def extract_multiple(
         self, sessions: List[Path], indices: List[int],

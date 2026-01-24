@@ -2,7 +2,7 @@
 
 run
 ```
-claude-extract --overwrite --from-date 2026-01-01 --by-project --by-day --all --output .
+claude-extract --overwrite --from-date 2026-01-14 --by-project --by-day --all --output .
 ```
 
 
