@@ -76,6 +76,42 @@ class ClaudeConversationExtractor:
                 sessions.append(jsonl_file)
         return sorted(sessions, key=lambda x: x.stat().st_mtime, reverse=True)
 
+    def find_session_by_id(self, session_id: str) -> Optional[Path]:
+        """Find a session by its ID (full or partial UUID).
+
+        Args:
+            session_id: Full UUID or partial ID (prefix) of the session
+
+        Returns:
+            Path to the JSONL file if found, None otherwise
+        """
+        session_id = session_id.lower().strip()
+        sessions = self.find_sessions()
+
+        # First try exact match
+        for session in sessions:
+            if session.stem.lower() == session_id:
+                return session
+
+        # Then try prefix match
+        matches = []
+        for session in sessions:
+            if session.stem.lower().startswith(session_id):
+                matches.append(session)
+
+        if len(matches) == 1:
+            return matches[0]
+        elif len(matches) > 1:
+            print(f"⚠️  Multiple sessions match '{session_id}':")
+            for m in matches[:5]:  # Show first 5 matches
+                print(f"   - {m.stem}")
+            if len(matches) > 5:
+                print(f"   ... and {len(matches) - 5} more")
+            print("Please provide a more specific ID.")
+            return None
+
+        return None
+
     def find_projects(self) -> List[Path]:
         """Find all project directories containing JSONL files.
 
@@ -2325,6 +2361,9 @@ Examples:
   %(prog)s --list-projects             # List all projects
   %(prog)s --project 1 --all           # Extract all sessions from project 1
   %(prog)s --project 1,3 --recent 5    # Extract recent from multiple projects
+  %(prog)s --session-id 8fd830ec       # Extract session by ID (partial or full)
+  %(prog)s --session-id 8fd830ec-ec03-4c6c-8d63-a23976a2ce97  # Full UUID
+  %(prog)s --bash-commands --session-id 8fd830ec  # Extract bash commands by session ID
         """,
     )
     parser.add_argument("--list", action="store_true", help="List recent sessions")
@@ -2338,6 +2377,11 @@ Examples:
         "--extract",
         type=str,
         help="Extract specific session(s) by number (comma-separated)",
+    )
+    parser.add_argument(
+        "--session-id",
+        type=str,
+        help="Extract session by ID (full UUID or partial prefix)",
     )
     parser.add_argument(
         "--all", "--logs", action="store_true", help="Extract all sessions"
@@ -2622,6 +2666,7 @@ Examples:
     # Default action is to list sessions
     if args.list or (
         not args.extract
+        and not args.session_id
         and not args.all
         and not args.recent
         and not args.search
@@ -2632,8 +2677,84 @@ Examples:
         if sessions and not args.list:
             print("\nTo extract conversations:")
             print("  claude-extract --extract <number>      # Extract specific session")
+            print("  claude-extract --session-id <id>       # Extract session by ID")
             print("  claude-extract --recent 5              # Extract 5 most recent")
             print("  claude-extract --all                   # Extract all sessions")
+
+    elif args.session_id:
+        # Find session by ID
+        session_path = extractor.find_session_by_id(args.session_id)
+        if not session_path:
+            print(f"❌ No session found matching ID: {args.session_id}")
+            return
+
+        session_id = session_path.stem
+        project_name = session_path.parent.name if args.by_project else None
+        print(f"📄 Found session: {session_id}")
+
+        if args.bash_commands:
+            print(f"\n📤 Extracting bash commands...")
+            if args.by_project:
+                print("📂 Organizing by project folders")
+            if args.by_day:
+                print("📅 Organizing by date folders")
+
+            bash_commands = extractor.extract_bash_commands(session_path)
+            if bash_commands:
+                output = extractor.save_bash_commands_as_markdown(
+                    bash_commands, session_id,
+                    by_day=args.by_day, by_project=args.by_project,
+                    project_name=project_name
+                )
+                if output:
+                    print(f"✅ Saved {len(bash_commands)} commands to: {output.name}")
+            else:
+                print("⚠️  No bash commands found in this session")
+
+        elif args.tool_ops:
+            # Parse tool filter
+            tool_filter = None
+            if args.tool_filter:
+                tool_filter = [t.strip() for t in args.tool_filter.split(",")]
+
+            print(f"\n📤 Extracting tool operations...")
+            if tool_filter:
+                print(f"🔧 Filter: {', '.join(tool_filter)}")
+            if args.detailed:
+                print("📋 Including detailed results")
+
+            tool_ops = extractor.extract_tool_operations(
+                session_path, tool_filter=tool_filter, detailed=args.detailed
+            )
+            if tool_ops and any(tool_ops.values()):
+                output = extractor.save_tool_operations_as_markdown(
+                    tool_ops, session_id,
+                    by_day=args.by_day, by_project=args.by_project,
+                    project_name=project_name
+                )
+                if output:
+                    total = sum(len(ops) for ops in tool_ops.values())
+                    print(f"✅ Saved {total} operations to: {output.name}")
+            else:
+                print("⚠️  No tool operations found in this session")
+
+        else:
+            print(f"\n📤 Extracting conversation as {args.format.upper()}...")
+            if args.detailed:
+                print("📋 Including detailed tool use and system messages")
+
+            conversation = extractor.extract_conversation(session_path, detailed=args.detailed)
+            if conversation:
+                output = extractor.save_conversation(
+                    conversation, session_id,
+                    format=args.format,
+                    by_day=args.by_day, by_project=args.by_project,
+                    project_name=project_name
+                )
+                if output:
+                    print(f"✅ Saved to: {output.name}")
+            else:
+                print("⚠️  No conversation found in this session")
 
     elif args.extract:
         sessions = extractor.find_sessions()
