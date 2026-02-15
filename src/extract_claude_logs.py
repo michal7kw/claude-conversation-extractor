@@ -73,8 +73,34 @@ class ClaudeConversationExtractor:
         sessions = []
         if search_dir.exists():
             for jsonl_file in search_dir.rglob("*.jsonl"):
+                # Skip subagent files — they belong to a parent session
+                path_str = str(jsonl_file)
+                if "/subagents/" in path_str or "\\subagents\\" in path_str:
+                    continue
                 sessions.append(jsonl_file)
         return sorted(sessions, key=lambda x: x.stat().st_mtime, reverse=True)
+
+    def find_subagent_files(self, session_path: Path) -> Dict[str, Path]:
+        """Find subagent JSONL files for a session.
+
+        New-format sessions store subagent conversations at:
+        {sessionId}/subagents/agent-{agentId}.jsonl
+
+        Args:
+            session_path: Path to the main session JSONL file
+
+        Returns:
+            Dict mapping agentId -> Path to subagent JSONL file
+        """
+        subagents_dir = session_path.parent / session_path.stem / "subagents"
+        if not subagents_dir.exists():
+            return {}
+
+        result = {}
+        for f in subagents_dir.glob("agent-*.jsonl"):
+            agent_id = f.stem.replace("agent-", "", 1)
+            result[agent_id] = f
+        return result
 
     def find_session_by_id(self, session_id: str) -> Optional[Path]:
         """Find a session by its ID (full or partial UUID).
@@ -195,184 +221,177 @@ class ClaudeConversationExtractor:
         # Filter sessions to only include those from selected projects
         return [s for s in sessions if s.parent in selected_project_dirs]
 
-    def extract_conversation(self, jsonl_path: Path, detailed: bool = False) -> List[Dict[str, str]]:
+    def extract_conversation(self, jsonl_path: Path, detailed: bool = False,
+                             include_thinking: bool = False) -> List[Dict[str, str]]:
         """Extract conversation messages from a JSONL file.
-        
+
         Args:
             jsonl_path: Path to the JSONL file
-            detailed: If True, include tool use, MCP responses, and system messages
+            detailed: If True, include tool use, system messages, and per-message metadata
+            include_thinking: If True, include Claude's thinking/reasoning blocks
         """
         conversation = []
-        pending_questions = {}  # Track questions by tool_use_id for Q&A matching
+        pending_questions = {}
 
         try:
             with open(jsonl_path, "r", encoding="utf-8") as f:
                 for line in f:
                     try:
                         entry = json.loads(line.strip())
+                        entry_type = entry.get("type", "")
 
-                        # Extract user messages
-                        if entry.get("type") == "user" and "message" in entry:
+                        # --- User messages ---
+                        if entry_type == "user" and "message" in entry:
                             msg = entry["message"]
                             if isinstance(msg, dict) and msg.get("role") == "user":
-                                # First check for Q&A answers (tool_result from AskUserQuestion)
+                                # Check for Q&A answers
                                 answer_data = self._extract_answers_from_entry(entry)
                                 if answer_data:
                                     tool_id = answer_data["tool_use_id"]
                                     if tool_id in pending_questions:
-                                        # Found matching question - add as Q&A pair
-                                        conversation.append(
-                                            {
-                                                "role": "qa",
-                                                "questions": pending_questions[tool_id],
-                                                "answers": answer_data["answers"],
-                                                "timestamp": entry.get("timestamp", ""),
-                                            }
-                                        )
+                                        conversation.append({
+                                            "role": "qa",
+                                            "questions": pending_questions[tool_id],
+                                            "answers": answer_data["answers"],
+                                            "timestamp": entry.get("timestamp", ""),
+                                        })
                                         del pending_questions[tool_id]
-                                        continue  # Skip normal user message processing
+                                        continue
 
                                 content = msg.get("content", "")
                                 text = self._extract_text_content(content)
 
                                 if text and text.strip():
-                                    # Check if this message contains a plan approval
-                                    # (plan approvals can appear in user messages as system feedback)
                                     if self._contains_plan_approval(text):
                                         plan = self._parse_plan_content(text)
                                         if plan:
-                                            conversation.append(
-                                                {
-                                                    "role": "plan",
-                                                    "content": text,
-                                                    "plan_title": plan["title"],
-                                                    "plan_path": plan["path"],
-                                                    "plan_content": plan["content"],
-                                                    "timestamp": entry.get("timestamp", ""),
-                                                }
-                                            )
+                                            conversation.append({
+                                                "role": "plan",
+                                                "content": text,
+                                                "plan_title": plan["title"],
+                                                "plan_path": plan["path"],
+                                                "plan_content": plan["content"],
+                                                "timestamp": entry.get("timestamp", ""),
+                                            })
                                         else:
-                                            # Plan detected but couldn't parse - add as user
-                                            conversation.append(
-                                                {
-                                                    "role": "user",
-                                                    "content": text,
-                                                    "timestamp": entry.get("timestamp", ""),
-                                                }
-                                            )
-                                    else:
-                                        conversation.append(
-                                            {
+                                            conversation.append({
                                                 "role": "user",
                                                 "content": text,
                                                 "timestamp": entry.get("timestamp", ""),
-                                            }
-                                        )
+                                            })
+                                    else:
+                                        conversation.append({
+                                            "role": "user",
+                                            "content": text,
+                                            "timestamp": entry.get("timestamp", ""),
+                                        })
 
-                        # Extract assistant messages
-                        elif entry.get("type") == "assistant" and "message" in entry:
+                        # --- Assistant messages ---
+                        elif entry_type == "assistant" and "message" in entry:
                             msg = entry["message"]
                             if isinstance(msg, dict) and msg.get("role") == "assistant":
                                 content = msg.get("content", [])
 
-                                # Check for AskUserQuestion and store for later matching
+                                # Check for AskUserQuestion
                                 qa_data = self._extract_questions_from_content(content)
                                 if qa_data:
                                     pending_questions[qa_data["tool_use_id"]] = qa_data["questions"]
 
-                                # Check for ExitPlanMode tool (plan completion)
+                                # Check for ExitPlanMode
                                 exit_plan = self._extract_plan_from_exit_tool(entry)
                                 if exit_plan:
-                                    conversation.append(
-                                        {
-                                            "role": "plan",
-                                            "content": exit_plan["content"],
-                                            "plan_title": exit_plan["title"],
-                                            "plan_path": exit_plan["path"],
-                                            "plan_content": exit_plan["content"],
-                                            "timestamp": entry.get("timestamp", ""),
-                                        }
-                                    )
-                                    continue  # Skip normal text processing for this entry
+                                    conversation.append({
+                                        "role": "plan",
+                                        "content": exit_plan["content"],
+                                        "plan_title": exit_plan["title"],
+                                        "plan_path": exit_plan["path"],
+                                        "plan_content": exit_plan["content"],
+                                        "timestamp": entry.get("timestamp", ""),
+                                    })
+                                    continue
+
+                                # Extract thinking blocks if requested
+                                if include_thinking and isinstance(content, list):
+                                    for item in content:
+                                        if isinstance(item, dict) and item.get("type") == "thinking":
+                                            thinking_text = item.get("thinking", "")
+                                            if thinking_text:
+                                                conversation.append({
+                                                    "role": "thinking",
+                                                    "content": thinking_text,
+                                                    "timestamp": entry.get("timestamp", ""),
+                                                })
 
                                 text = self._extract_text_content(content, detailed=detailed)
 
                                 if text and text.strip():
-                                    # Check if this message contains a plan approval
                                     if self._contains_plan_approval(text):
                                         plan = self._parse_plan_content(text)
                                         if plan:
-                                            conversation.append(
-                                                {
-                                                    "role": "plan",
-                                                    "content": text,
-                                                    "plan_title": plan["title"],
-                                                    "plan_path": plan["path"],
-                                                    "plan_content": plan["content"],
-                                                    "timestamp": entry.get("timestamp", ""),
-                                                }
-                                            )
+                                            conversation.append({
+                                                "role": "plan",
+                                                "content": text,
+                                                "plan_title": plan["title"],
+                                                "plan_path": plan["path"],
+                                                "plan_content": plan["content"],
+                                                "timestamp": entry.get("timestamp", ""),
+                                            })
                                         else:
-                                            # Plan detected but couldn't parse - add as assistant
-                                            conversation.append(
-                                                {
-                                                    "role": "assistant",
-                                                    "content": text,
-                                                    "timestamp": entry.get("timestamp", ""),
-                                                }
-                                            )
-                                    else:
-                                        conversation.append(
-                                            {
+                                            msg_dict = {
                                                 "role": "assistant",
                                                 "content": text,
                                                 "timestamp": entry.get("timestamp", ""),
                                             }
-                                        )
-                        
-                        # Include tool use and system messages if detailed mode
-                        elif detailed:
-                            # Extract tool use events
-                            if entry.get("type") == "tool_use":
-                                tool_data = entry.get("tool", {})
-                                tool_name = tool_data.get("name", "unknown")
-                                tool_input = tool_data.get("input", {})
-                                conversation.append(
-                                    {
-                                        "role": "tool_use",
-                                        "content": f"🔧 Tool: {tool_name}\nInput: {json.dumps(tool_input, indent=2)}",
-                                        "timestamp": entry.get("timestamp", ""),
-                                    }
-                                )
-                            
-                            # Extract tool results
-                            elif entry.get("type") == "tool_result":
-                                result = entry.get("result", {})
-                                output = result.get("output", "") or result.get("error", "")
-                                conversation.append(
-                                    {
-                                        "role": "tool_result",
-                                        "content": f"📤 Result:\n{output}",
-                                        "timestamp": entry.get("timestamp", ""),
-                                    }
-                                )
-                            
-                            # Extract system messages
-                            elif entry.get("type") == "system" and "message" in entry:
-                                msg = entry.get("message", "")
-                                if msg:
-                                    conversation.append(
-                                        {
-                                            "role": "system",
-                                            "content": f"ℹ️ System: {msg}",
+                                            if detailed:
+                                                msg_dict["metadata"] = self._extract_message_metadata(entry)
+                                            conversation.append(msg_dict)
+                                    else:
+                                        msg_dict = {
+                                            "role": "assistant",
+                                            "content": text,
                                             "timestamp": entry.get("timestamp", ""),
                                         }
-                                    )
+                                        if detailed:
+                                            msg_dict["metadata"] = self._extract_message_metadata(entry)
+                                        conversation.append(msg_dict)
+
+                        # --- System messages (new format) ---
+                        elif entry_type == "system" and detailed:
+                            subtype = entry.get("subtype", "")
+                            content = entry.get("content", "")
+
+                            if subtype == "turn_duration":
+                                duration_ms = entry.get("durationMs", 0)
+                                text = f"Turn completed in {duration_ms / 1000:.1f}s"
+                            elif subtype == "local_command":
+                                text = f"Command: {content}"
+                            else:
+                                text = content or str(entry.get("subtype", "system"))
+
+                            if text:
+                                conversation.append({
+                                    "role": "system",
+                                    "content": f"ℹ️ System: {text}",
+                                    "timestamp": entry.get("timestamp", ""),
+                                })
+
+                        # --- Progress entries (hook events) ---
+                        elif entry_type == "progress" and detailed:
+                            data = entry.get("data", {})
+                            hook_event = data.get("hookEvent", "")
+                            hook_name = data.get("hookName", "")
+                            if hook_event:
+                                conversation.append({
+                                    "role": "system",
+                                    "content": f"⚙️ Hook: {hook_event} ({hook_name})",
+                                    "timestamp": entry.get("timestamp", ""),
+                                })
+
+                        # file-history-snapshot entries are skipped entirely
 
                     except json.JSONDecodeError:
                         continue
                     except Exception:
-                        # Silently skip problematic entries
                         continue
 
         except Exception as e:
@@ -782,23 +801,18 @@ class ClaudeConversationExtractor:
         return summary
 
     def _extract_text_content(self, content, detailed: bool = False) -> str:
-        """Extract text from various content formats Claude uses.
-        
-        Args:
-            content: The content to extract from
-            detailed: If True, include tool use blocks and other metadata
-        """
+        """Extract text from various content formats Claude uses."""
         if isinstance(content, str):
             return content
         elif isinstance(content, list):
-            # Extract text from content array
             text_parts = []
             for item in content:
                 if isinstance(item, dict):
                     if item.get("type") == "text":
                         text_parts.append(item.get("text", ""))
+                    elif item.get("type") == "tool_result":
+                        continue  # Handled separately
                     elif detailed and item.get("type") == "tool_use":
-                        # Include tool use details in detailed mode
                         tool_name = item.get("name", "unknown")
                         tool_input = item.get("input", {})
                         text_parts.append(f"\n🔧 Using tool: {tool_name}")
@@ -806,6 +820,19 @@ class ClaudeConversationExtractor:
             return "\n".join(text_parts)
         else:
             return str(content)
+
+    def _extract_message_metadata(self, entry: Dict) -> Dict:
+        """Extract per-message metadata from an assistant entry."""
+        msg = entry.get("message", {})
+        usage = msg.get("usage", {})
+        return {
+            "model": msg.get("model", ""),
+            "input_tokens": usage.get("input_tokens", 0),
+            "output_tokens": usage.get("output_tokens", 0),
+            "cache_read_tokens": usage.get("cache_read_input_tokens", 0),
+            "cwd": entry.get("cwd", ""),
+            "git_branch": entry.get("gitBranch", ""),
+        }
 
     def _contains_plan_approval(self, text: str) -> bool:
         """Check if text contains a plan approval section.
