@@ -440,7 +440,7 @@ class TestMainFunction(unittest.TestCase):
                 with patch.object(ClaudeConversationExtractor, "list_recent_sessions"):
                     main()
                     # Should initialize with custom output
-                    mock_class.assert_called_once_with(custom_output)
+                    mock_class.assert_called_once_with(custom_output, claude_dir=None)
 
     def test_main_interactive_flag(self):
         """Test --interactive flag"""

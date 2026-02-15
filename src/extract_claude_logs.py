@@ -29,9 +29,19 @@ ALL_EXTRACTABLE_TOOLS = ["Read", "Write", "Edit", "Grep", "Glob", "WebFetch", "W
 class ClaudeConversationExtractor:
     """Extract and convert Claude Code conversations from JSONL to markdown."""
 
-    def __init__(self, output_dir: Optional[Path] = None):
-        """Initialize the extractor with Claude's directory and output location."""
-        self.claude_dir = Path.home() / ".claude" / "projects"
+    def __init__(self, output_dir: Optional[Path] = None, claude_dir: Optional[str] = None):
+        """Initialize the extractor with Claude's directory and output location.
+
+        Args:
+            output_dir: Directory to save extracted files. Auto-detected if None.
+            claude_dir: Override path to Claude's projects directory.
+                        Useful for accessing Windows Claude data from WSL
+                        (e.g., /mnt/c/Users/username/.claude/projects).
+        """
+        if claude_dir:
+            self.claude_dir = Path(claude_dir)
+        else:
+            self.claude_dir = Path.home() / ".claude" / "projects"
 
         if output_dir:
             self.output_dir = Path(output_dir)
@@ -2751,6 +2761,7 @@ Examples:
   %(prog)s --session-id 8fd830ec       # Extract session by ID (partial or full)
   %(prog)s --session-id 8fd830ec-ec03-4c6c-8d63-a23976a2ce97  # Full UUID
   %(prog)s --bash-commands --session-id 8fd830ec  # Extract bash commands by session ID
+  %(prog)s --claude-dir /mnt/c/Users/me/.claude/projects --list  # WSL: read Windows Claude data
         """,
     )
     parser.add_argument("--list", action="store_true", help="List recent sessions")
@@ -2778,6 +2789,11 @@ Examples:
     )
     parser.add_argument(
         "--output", type=str, help="Output directory for markdown files"
+    )
+    parser.add_argument(
+        "--claude-dir", type=str,
+        help="Override path to Claude's projects directory "
+             "(e.g., /mnt/c/Users/username/.claude/projects for Windows data from WSL)"
     )
     parser.add_argument(
         "--limit", type=int, help="Limit for --list command (default: show all)", default=None
@@ -2922,7 +2938,7 @@ Examples:
         return
 
     # Initialize extractor with optional output directory
-    extractor = ClaudeConversationExtractor(args.output)
+    extractor = ClaudeConversationExtractor(args.output, claude_dir=args.claude_dir)
 
     # Handle --list-projects
     if args.list_projects:
