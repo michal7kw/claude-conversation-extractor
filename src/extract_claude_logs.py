@@ -12,6 +12,7 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
+from collections import Counter
 from typing import Dict, List, Optional, Tuple
 
 # Tool categories for extraction
@@ -217,6 +218,10 @@ class ClaudeConversationExtractor:
         projects = {}
         if self.claude_dir.exists():
             for jsonl_file in self.claude_dir.rglob("*.jsonl"):
+                # Skip subagent files
+                path_str = str(jsonl_file)
+                if "/subagents/" in path_str or "\\subagents\\" in path_str:
+                    continue
                 project_dir = jsonl_file.parent
                 # Track the most recent modification time for each project
                 mtime = jsonl_file.stat().st_mtime
@@ -304,7 +309,6 @@ class ClaudeConversationExtractor:
         conversation = []
         pending_questions = {}
 
-        from collections import Counter
         stats = {
             "models_used": set(),
             "total_input_tokens": 0,
@@ -1151,16 +1155,17 @@ class ClaudeConversationExtractor:
                         }
         return None
 
-    def display_conversation(self, jsonl_path: Path, detailed: bool = False) -> None:
+    def display_conversation(self, jsonl_path: Path, detailed: bool = False, include_thinking: bool = False) -> None:
         """Display a conversation in the terminal with pagination.
-        
+
         Args:
             jsonl_path: Path to the JSONL file
             detailed: If True, include tool use and system messages
+            include_thinking: If True, include thinking/reasoning blocks
         """
         try:
             # Extract conversation
-            messages = self.extract_conversation(jsonl_path, detailed=detailed)
+            messages = self.extract_conversation(jsonl_path, detailed=detailed, include_thinking=include_thinking)
             
             if not messages:
                 print("❌ No messages found in conversation")

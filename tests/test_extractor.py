@@ -78,8 +78,9 @@ class TestClaudeConversationExtractor(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertTrue(result.exists())
-        self.assertTrue(result.name.startswith("claude-conversation-"))
         self.assertTrue(result.name.endswith(".md"))
+        # Filename format: {date}-{time}-{session_id[:8]}.md
+        self.assertIn("test-ses", result.name)
 
         # Check content
         content = result.read_text()
