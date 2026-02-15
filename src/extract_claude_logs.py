@@ -102,6 +102,77 @@ class ClaudeConversationExtractor:
             result[agent_id] = f
         return result
 
+    def extract_subagent_conversation(self, subagent_path: Path,
+                                       detailed: bool = False,
+                                       include_thinking: bool = False) -> Dict:
+        """Extract a subagent's conversation from its JSONL file.
+
+        Returns:
+            Dict with keys: agent_id, model, messages (list of message dicts)
+        """
+        messages = []
+        model = ""
+
+        try:
+            with open(subagent_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        entry = json.loads(line.strip())
+                        entry_type = entry.get("type", "")
+
+                        if entry_type == "user" and "message" in entry:
+                            msg = entry["message"]
+                            if isinstance(msg, dict) and msg.get("role") == "user":
+                                content = msg.get("content", "")
+                                text = self._extract_text_content(content)
+                                if text and text.strip():
+                                    messages.append({
+                                        "role": "user",
+                                        "content": text,
+                                        "timestamp": entry.get("timestamp", ""),
+                                    })
+
+                        elif entry_type == "assistant" and "message" in entry:
+                            msg = entry["message"]
+                            if isinstance(msg, dict) and msg.get("role") == "assistant":
+                                if not model:
+                                    model = msg.get("model", "")
+
+                                content = msg.get("content", [])
+
+                                if include_thinking and isinstance(content, list):
+                                    for item in content:
+                                        if isinstance(item, dict) and item.get("type") == "thinking":
+                                            thinking_text = item.get("thinking", "")
+                                            if thinking_text:
+                                                messages.append({
+                                                    "role": "thinking",
+                                                    "content": thinking_text,
+                                                    "timestamp": entry.get("timestamp", ""),
+                                                })
+
+                                text = self._extract_text_content(content, detailed=detailed)
+                                if text and text.strip():
+                                    messages.append({
+                                        "role": "assistant",
+                                        "content": text,
+                                        "timestamp": entry.get("timestamp", ""),
+                                    })
+
+                    except (json.JSONDecodeError, Exception):
+                        continue
+
+        except Exception:
+            pass
+
+        agent_id = subagent_path.stem.replace("agent-", "", 1)
+
+        return {
+            "agent_id": agent_id,
+            "model": model,
+            "messages": messages,
+        }
+
     def find_session_by_id(self, session_id: str) -> Optional[Path]:
         """Find a session by its ID (full or partial UUID).
 
@@ -233,6 +304,25 @@ class ClaudeConversationExtractor:
         conversation = []
         pending_questions = {}
 
+        from collections import Counter
+        stats = {
+            "models_used": set(),
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_cache_read_tokens": 0,
+            "total_cache_creation_tokens": 0,
+            "turn_count": 0,
+            "tool_use_count": 0,
+            "tools_used": Counter(),
+            "subagent_count": 0,
+            "total_duration_ms": 0,
+            "session_version": "",
+            "git_branch": "",
+        }
+
+        pending_task_tools = {}  # tool_use_id -> {"description": str, "subagent_type": str}
+        subagent_files = self.find_subagent_files(jsonl_path)
+
         try:
             with open(jsonl_path, "r", encoding="utf-8") as f:
                 for line in f:
@@ -240,10 +330,52 @@ class ClaudeConversationExtractor:
                         entry = json.loads(line.strip())
                         entry_type = entry.get("type", "")
 
+                        # Capture version/branch from first entry
+                        if not stats["session_version"]:
+                            stats["session_version"] = entry.get("version", "")
+                            stats["git_branch"] = entry.get("gitBranch", "")
+
                         # --- User messages ---
                         if entry_type == "user" and "message" in entry:
                             msg = entry["message"]
                             if isinstance(msg, dict) and msg.get("role") == "user":
+                                # Check for subagent results in tool_result content blocks
+                                content = msg.get("content", "")
+                                if isinstance(content, list):
+                                    for item in content:
+                                        if isinstance(item, dict) and item.get("type") == "tool_result":
+                                            tool_use_id = item.get("tool_use_id", "")
+                                            if tool_use_id in pending_task_tools:
+                                                result_text = item.get("content", "")
+                                                if isinstance(result_text, list):
+                                                    result_text = "\n".join(
+                                                        b.get("text", "") for b in result_text if isinstance(b, dict)
+                                                    )
+                                                result_text = str(result_text)
+
+                                                agent_id_match = re.search(r'agentId:\s*(\w+)', result_text)
+                                                if agent_id_match:
+                                                    agent_id = agent_id_match.group(1)
+                                                    if agent_id in subagent_files:
+                                                        sub_conv = self.extract_subagent_conversation(
+                                                            subagent_files[agent_id],
+                                                            detailed=detailed,
+                                                            include_thinking=include_thinking,
+                                                        )
+                                                        task_info = pending_task_tools[tool_use_id]
+                                                        conversation.append({
+                                                            "role": "subagent",
+                                                            "description": task_info["description"],
+                                                            "subagent_type": task_info["subagent_type"],
+                                                            "agent_id": sub_conv["agent_id"],
+                                                            "model": sub_conv["model"],
+                                                            "messages": sub_conv["messages"],
+                                                            "timestamp": entry.get("timestamp", ""),
+                                                        })
+                                                        if detailed:
+                                                            stats["subagent_count"] += 1
+                                                del pending_task_tools[tool_use_id]
+
                                 # Check for Q&A answers
                                 answer_data = self._extract_answers_from_entry(entry)
                                 if answer_data:
@@ -258,7 +390,6 @@ class ClaudeConversationExtractor:
                                         del pending_questions[tool_id]
                                         continue
 
-                                content = msg.get("content", "")
                                 text = self._extract_text_content(content)
 
                                 if text and text.strip():
@@ -285,12 +416,40 @@ class ClaudeConversationExtractor:
                                             "content": text,
                                             "timestamp": entry.get("timestamp", ""),
                                         })
+                                    stats["turn_count"] += 1
 
                         # --- Assistant messages ---
                         elif entry_type == "assistant" and "message" in entry:
                             msg = entry["message"]
                             if isinstance(msg, dict) and msg.get("role") == "assistant":
                                 content = msg.get("content", [])
+
+                                # Accumulate stats for assistant messages
+                                if detailed:
+                                    model = msg.get("model", "")
+                                    if model:
+                                        stats["models_used"].add(model)
+                                    usage = msg.get("usage", {})
+                                    stats["total_input_tokens"] += usage.get("input_tokens", 0)
+                                    stats["total_output_tokens"] += usage.get("output_tokens", 0)
+                                    stats["total_cache_read_tokens"] += usage.get("cache_read_input_tokens", 0)
+                                    stats["total_cache_creation_tokens"] += usage.get("cache_creation_input_tokens", 0)
+                                    if isinstance(content, list):
+                                        for item in content:
+                                            if isinstance(item, dict) and item.get("type") == "tool_use":
+                                                stats["tool_use_count"] += 1
+                                                stats["tools_used"][item.get("name", "unknown")] += 1
+
+                                # Detect Task tool uses for subagent merging
+                                if isinstance(content, list):
+                                    for item in content:
+                                        if isinstance(item, dict) and item.get("type") == "tool_use":
+                                            if item.get("name") == "Task":
+                                                tool_input = item.get("input", {})
+                                                pending_task_tools[item.get("id", "")] = {
+                                                    "description": tool_input.get("description", ""),
+                                                    "subagent_type": tool_input.get("subagent_type", ""),
+                                                }
 
                                 # Check for AskUserQuestion
                                 qa_data = self._extract_questions_from_content(content)
@@ -356,8 +515,16 @@ class ClaudeConversationExtractor:
                                         conversation.append(msg_dict)
 
                         # --- System messages (new format) ---
-                        elif entry_type == "system" and detailed:
+                        elif entry_type == "system":
                             subtype = entry.get("subtype", "")
+
+                            # Always accumulate duration stats
+                            if subtype == "turn_duration":
+                                stats["total_duration_ms"] += entry.get("durationMs", 0)
+
+                            if not detailed:
+                                continue
+
                             content = entry.get("content", "")
 
                             if subtype == "turn_duration":
@@ -396,6 +563,15 @@ class ClaudeConversationExtractor:
 
         except Exception as e:
             print(f"❌ Error reading file {jsonl_path}: {e}")
+
+        if detailed and conversation:
+            stats["models_used"] = sorted(stats["models_used"])
+            stats["tools_used"] = dict(stats["tools_used"])
+            conversation.append({
+                "role": "stats",
+                "content": stats,
+                "timestamp": "",
+            })
 
         return conversation
 

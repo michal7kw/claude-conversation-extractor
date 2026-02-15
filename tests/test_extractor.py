@@ -427,6 +427,147 @@ class TestClaudeConversationExtractor(unittest.TestCase):
         assistant_msg = [m for m in conversation if m["role"] == "assistant"][0]
         self.assertNotIn("metadata", assistant_msg)
 
+    def test_stats_block_in_detailed_mode(self):
+        """Test summary stats block appended in detailed mode."""
+        import json
+        from fixtures.sample_conversations import (
+            make_user_entry, make_assistant_entry,
+            make_system_entry, write_jsonl
+        )
+
+        jsonl_file = Path(self.temp_dir) / "test.jsonl"
+        entries = [
+            make_user_entry("Hello"),
+            make_assistant_entry("Hi!", tool_uses=[
+                {"id": "t1", "name": "Bash", "input": {"command": "ls"}}
+            ]),
+            make_system_entry(subtype="turn_duration", duration_ms=3000),
+            make_user_entry("Thanks"),
+            make_assistant_entry("Welcome!", model="claude-haiku-4-5-20251001"),
+        ]
+        write_jsonl(jsonl_file, entries)
+
+        conversation = self.extractor.extract_conversation(jsonl_file, detailed=True)
+
+        stats_msgs = [m for m in conversation if m["role"] == "stats"]
+        self.assertEqual(len(stats_msgs), 1)
+        stats = stats_msgs[0]["content"]
+        self.assertIn("claude-opus-4-6", stats["models_used"])
+        self.assertIn("claude-haiku-4-5-20251001", stats["models_used"])
+        self.assertEqual(stats["turn_count"], 2)
+        self.assertEqual(stats["tool_use_count"], 1)
+        self.assertIn("Bash", stats["tools_used"])
+        self.assertEqual(stats["total_duration_ms"], 3000)
+        self.assertEqual(stats["session_version"], "2.1.42")
+
+    def test_stats_not_in_normal_mode(self):
+        """Test no stats block in non-detailed mode."""
+        import json
+        from fixtures.sample_conversations import (
+            make_user_entry, make_assistant_entry, write_jsonl
+        )
+
+        jsonl_file = Path(self.temp_dir) / "test.jsonl"
+        entries = [
+            make_user_entry("Hello"),
+            make_assistant_entry("Hi!"),
+        ]
+        write_jsonl(jsonl_file, entries)
+
+        conversation = self.extractor.extract_conversation(jsonl_file)
+        stats_msgs = [m for m in conversation if m["role"] == "stats"]
+        self.assertEqual(len(stats_msgs), 0)
+
+    def test_subagent_inline_merging(self):
+        """Test subagent conversation is inlined at Task tool invocation point."""
+        import json
+        from fixtures.sample_conversations import (
+            make_user_entry, make_assistant_entry,
+            make_user_entry_with_tool_results, write_jsonl
+        )
+
+        projects_dir = Path(self.temp_dir) / "projects" / "test-project"
+        projects_dir.mkdir(parents=True)
+
+        session_id = "test-session-id"
+        main_file = projects_dir / f"{session_id}.jsonl"
+
+        subagent_dir = projects_dir / session_id / "subagents"
+        subagent_dir.mkdir(parents=True)
+        sub_file = subagent_dir / "agent-abc123.jsonl"
+
+        task_tool_use_id = "toolu_task_001"
+
+        main_entries = [
+            make_user_entry("Explore the codebase", session_id=session_id),
+            make_assistant_entry("Let me explore.", tool_uses=[
+                {"id": task_tool_use_id, "name": "Task", "input": {
+                    "description": "Explore codebase",
+                    "prompt": "Find all Python files",
+                    "subagent_type": "Explore",
+                }}
+            ], session_id=session_id),
+            make_user_entry_with_tool_results([
+                {"tool_use_id": task_tool_use_id,
+                 "content": "Found 5 Python files.\nagentId: abc123 (for resuming)"}
+            ], session_id=session_id),
+            make_assistant_entry("I found 5 Python files.", session_id=session_id),
+        ]
+        write_jsonl(main_file, main_entries)
+
+        sub_entries = [
+            make_user_entry("Find all Python files",
+                            session_id=session_id, is_sidechain=True, agent_id="abc123"),
+            make_assistant_entry("I'll search for .py files.",
+                                session_id=session_id, is_sidechain=True,
+                                agent_id="abc123", model="claude-haiku-4-5-20251001"),
+            make_assistant_entry("Found 5 Python files: main.py, utils.py, test.py, config.py, setup.py",
+                                session_id=session_id, is_sidechain=True,
+                                agent_id="abc123", model="claude-haiku-4-5-20251001"),
+        ]
+        write_jsonl(sub_file, sub_entries)
+
+        conversation = self.extractor.extract_conversation(main_file)
+
+        subagent_msgs = [m for m in conversation if m["role"] == "subagent"]
+        self.assertEqual(len(subagent_msgs), 1)
+        sub = subagent_msgs[0]
+        self.assertEqual(sub["agent_id"], "abc123")
+        self.assertEqual(sub["description"], "Explore codebase")
+        self.assertTrue(len(sub["messages"]) >= 2)
+
+    def test_subagent_no_files_graceful(self):
+        """Test graceful handling when subagent file doesn't exist."""
+        import json
+        from fixtures.sample_conversations import (
+            make_user_entry, make_assistant_entry,
+            make_user_entry_with_tool_results, write_jsonl
+        )
+
+        jsonl_file = Path(self.temp_dir) / "test.jsonl"
+        task_tool_use_id = "toolu_task_002"
+
+        entries = [
+            make_user_entry("Do something"),
+            make_assistant_entry("On it.", tool_uses=[
+                {"id": task_tool_use_id, "name": "Task", "input": {
+                    "description": "Some task",
+                    "prompt": "Do the thing",
+                    "subagent_type": "Explore",
+                }}
+            ]),
+            make_user_entry_with_tool_results([
+                {"tool_use_id": task_tool_use_id,
+                 "content": "Done.\nagentId: nonexistent (for resuming)"}
+            ]),
+            make_assistant_entry("All done."),
+        ]
+        write_jsonl(jsonl_file, entries)
+
+        conversation = self.extractor.extract_conversation(jsonl_file)
+        subagent_msgs = [m for m in conversation if m["role"] == "subagent"]
+        self.assertEqual(len(subagent_msgs), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
