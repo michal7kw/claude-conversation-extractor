@@ -1388,6 +1388,19 @@ class ClaudeConversationExtractor:
                     f.write(f"{content}\n\n")
                 elif role == "assistant":
                     f.write("## 🤖 Claude\n\n")
+                    metadata = msg.get("metadata")
+                    if metadata:
+                        model = metadata.get("model", "")
+                        inp = metadata.get("input_tokens", 0)
+                        out = metadata.get("output_tokens", 0)
+                        cache = metadata.get("cache_read_tokens", 0)
+                        parts = []
+                        if model:
+                            parts.append(f"model: {model}")
+                        parts.append(f"tokens: {inp:,}→{out:,}")
+                        if cache:
+                            parts.append(f"cache read: {cache:,}")
+                        f.write(f"> *{' | '.join(parts)}*\n\n")
                     f.write(f"{content}\n\n")
                 elif role == "tool_use":
                     f.write("### 🔧 Tool Use\n\n")
@@ -1438,13 +1451,75 @@ class ClaudeConversationExtractor:
                                 f.write("\n")
                             f.write("\n")
                         f.write(f"**Selected:** {answer}\n\n")
+                elif role == "thinking":
+                    f.write("### 💭 Thinking\n\n")
+                    f.write("<details>\n<summary>Claude's reasoning</summary>\n\n")
+                    f.write(f"{content}\n\n")
+                    f.write("</details>\n\n")
+
+                elif role == "subagent":
+                    desc = msg.get("description", "Subagent task")
+                    agent_id = msg.get("agent_id", "unknown")
+                    model = msg.get("model", "unknown")
+                    agent_type = msg.get("subagent_type", "")
+                    f.write(f"### 🔄 Subagent: {desc}\n\n")
+                    f.write(f"> *Agent: {agent_id} | Model: {model}")
+                    if agent_type:
+                        f.write(f" | Type: {agent_type}")
+                    f.write("*\n\n")
+                    for sub_msg in msg.get("messages", []):
+                        sub_role = sub_msg.get("role", "")
+                        sub_content = sub_msg.get("content", "")
+                        if sub_role == "user":
+                            f.write(f"#### 👤 User (Subagent)\n\n{sub_content}\n\n")
+                        elif sub_role == "assistant":
+                            f.write(f"#### 🤖 Claude (Subagent)\n\n{sub_content}\n\n")
+                        elif sub_role == "thinking":
+                            f.write("#### 💭 Thinking (Subagent)\n\n")
+                            f.write(f"<details>\n<summary>Reasoning</summary>\n\n{sub_content}\n\n</details>\n\n")
+
+                elif role == "stats":
+                    stats = msg.get("content", {})
+                    if isinstance(stats, dict):
+                        f.write("## 📊 Session Statistics\n\n")
+                        f.write("| Metric | Value |\n")
+                        f.write("|--------|-------|\n")
+                        models = ", ".join(stats.get("models_used", []))
+                        f.write(f"| Models | {models} |\n")
+                        f.write(f"| User turns | {stats.get('turn_count', 0)} |\n")
+                        f.write(f"| Tool invocations | {stats.get('tool_use_count', 0)} |\n")
+                        f.write(f"| Subagents spawned | {stats.get('subagent_count', 0)} |\n")
+                        f.write(f"| Total input tokens | {stats.get('total_input_tokens', 0):,} |\n")
+                        f.write(f"| Total output tokens | {stats.get('total_output_tokens', 0):,} |\n")
+                        cache = stats.get("total_cache_read_tokens", 0)
+                        if cache:
+                            f.write(f"| Cache read tokens | {cache:,} |\n")
+                        duration_ms = stats.get("total_duration_ms", 0)
+                        if duration_ms:
+                            mins = duration_ms // 60000
+                            secs = (duration_ms % 60000) / 1000
+                            f.write(f"| Total duration | {mins}m {secs:.0f}s |\n")
+                        ver = stats.get("session_version", "")
+                        if ver:
+                            f.write(f"| Claude Code version | {ver} |\n")
+                        branch = stats.get("git_branch", "")
+                        if branch:
+                            f.write(f"| Git branch | {branch} |\n")
+                        f.write("\n")
+                        tools = stats.get("tools_used", {})
+                        if tools:
+                            f.write("**Tools breakdown:**\n")
+                            for tool_name, count in sorted(tools.items(), key=lambda x: -x[1]):
+                                f.write(f"- {tool_name}: {count}\n")
+                            f.write("\n")
+
                 else:
                     f.write(f"## {role}\n\n")
                     f.write(f"{content}\n\n")
                 f.write("---\n\n")
 
         return output_path
-    
+
     def save_as_json(
         self, conversation: List[Dict[str, str]], session_id: str,
         by_day: bool = False, by_project: bool = False, project_name: Optional[str] = None
@@ -1646,6 +1721,57 @@ class ClaudeConversationExtractor:
         .qa-choices li strong {{
             color: #27ae60;
         }}
+        .thinking {{
+            border-left: 4px solid #8e44ad;
+            background: #faf5ff;
+        }}
+        .thinking details {{
+            margin: 5px 0;
+        }}
+        .thinking summary {{
+            cursor: pointer;
+            color: #8e44ad;
+            font-weight: bold;
+        }}
+        .subagent {{
+            border-left: 4px solid #16a085;
+            background: #f0faf8;
+        }}
+        .subagent-info {{
+            font-size: 0.85em;
+            color: #666;
+            font-style: italic;
+            margin-bottom: 10px;
+        }}
+        .subagent-message {{
+            margin-left: 20px;
+            padding: 8px 12px;
+            border-left: 2px solid #ccc;
+            margin-bottom: 8px;
+        }}
+        .stats {{
+            border-left: 4px solid #2980b9;
+            background: #f5f9ff;
+        }}
+        .stats-table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin: 10px 0;
+        }}
+        .stats-table th, .stats-table td {{
+            padding: 6px 12px;
+            border: 1px solid #ddd;
+            text-align: left;
+        }}
+        .stats-table th {{
+            background: #eef3f9;
+        }}
+        .msg-metadata {{
+            font-size: 0.8em;
+            color: #888;
+            font-style: italic;
+            margin-bottom: 8px;
+        }}
         .role {{
             font-weight: bold;
             margin-bottom: 10px;
@@ -1686,13 +1812,16 @@ class ClaudeConversationExtractor:
             
             for msg in conversation:
                 role = msg["role"]
-                content = msg.get("content", "")  # Q&A entries may not have content
+                raw_content = msg.get("content", "")  # Q&A entries may not have content
 
-                # Escape HTML
-                content = content.replace("&", "&amp;")
-                content = content.replace("<", "&lt;")
-                content = content.replace(">", "&gt;")
-                
+                # Escape HTML only for string content
+                if isinstance(raw_content, str):
+                    content = raw_content.replace("&", "&amp;")
+                    content = content.replace("<", "&lt;")
+                    content = content.replace(">", "&gt;")
+                else:
+                    content = raw_content  # dicts (stats) handled separately
+
                 role_display = {
                     "user": "👤 User",
                     "assistant": "🤖 Claude",
@@ -1700,7 +1829,10 @@ class ClaudeConversationExtractor:
                     "tool_result": "📤 Tool Result",
                     "system": "ℹ️ System",
                     "plan": "📋 Approved Plan",
-                    "qa": "❓ Questions & Answers"
+                    "qa": "❓ Questions & Answers",
+                    "thinking": "💭 Thinking",
+                    "subagent": "🔄 Subagent",
+                    "stats": "📊 Session Statistics",
                 }.get(role, role)
 
                 f.write(f'    <div class="message {role}">\n')
@@ -1753,6 +1885,80 @@ class ClaudeConversationExtractor:
                                 f.write('</li>\n')
                             f.write('        </ul></div>\n')
                         f.write(f'        <div class="qa-answer">Selected: {answer_str}</div>\n')
+                elif role == "assistant":
+                    # Show metadata if present
+                    metadata = msg.get("metadata")
+                    if metadata:
+                        model = metadata.get("model", "")
+                        inp = metadata.get("input_tokens", 0)
+                        out = metadata.get("output_tokens", 0)
+                        cache_r = metadata.get("cache_read_tokens", 0)
+                        parts = []
+                        if model:
+                            parts.append(f"model: {model}")
+                        parts.append(f"tokens: {inp:,}&rarr;{out:,}")
+                        if cache_r:
+                            parts.append(f"cache read: {cache_r:,}")
+                        f.write(f'        <div class="msg-metadata">{" | ".join(parts)}</div>\n')
+                    f.write(f'        <div class="content">{content}</div>\n')
+                elif role == "thinking":
+                    f.write('        <details>\n')
+                    f.write("            <summary>Claude's reasoning</summary>\n")
+                    f.write(f'            <div class="content">{content}</div>\n')
+                    f.write('        </details>\n')
+                elif role == "subagent":
+                    desc = msg.get("description", "Subagent task")
+                    agent_id = msg.get("agent_id", "unknown")
+                    model_name = msg.get("model", "unknown")
+                    agent_type = msg.get("subagent_type", "")
+                    info_parts = [f"Agent: {agent_id}", f"Model: {model_name}"]
+                    if agent_type:
+                        info_parts.append(f"Type: {agent_type}")
+                    f.write(f'        <div class="subagent-info">{desc} &mdash; {" | ".join(info_parts)}</div>\n')
+                    for sub_msg in msg.get("messages", []):
+                        sub_role = sub_msg.get("role", "")
+                        sub_content = sub_msg.get("content", "")
+                        if isinstance(sub_content, str):
+                            sub_content = sub_content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                        if sub_role == "user":
+                            f.write(f'        <div class="subagent-message"><strong>User:</strong> {sub_content}</div>\n')
+                        elif sub_role == "assistant":
+                            f.write(f'        <div class="subagent-message"><strong>Claude:</strong> {sub_content}</div>\n')
+                        elif sub_role == "thinking":
+                            f.write(f'        <div class="subagent-message"><details><summary>Reasoning</summary>{sub_content}</details></div>\n')
+                elif role == "stats":
+                    stats = msg.get("content", {})
+                    if isinstance(stats, dict):
+                        f.write('        <table class="stats-table">\n')
+                        f.write('            <tr><th>Metric</th><th>Value</th></tr>\n')
+                        models = ", ".join(stats.get("models_used", []))
+                        f.write(f'            <tr><td>Models</td><td>{models}</td></tr>\n')
+                        f.write(f'            <tr><td>User turns</td><td>{stats.get("turn_count", 0)}</td></tr>\n')
+                        f.write(f'            <tr><td>Tool invocations</td><td>{stats.get("tool_use_count", 0)}</td></tr>\n')
+                        f.write(f'            <tr><td>Subagents spawned</td><td>{stats.get("subagent_count", 0)}</td></tr>\n')
+                        f.write(f'            <tr><td>Total input tokens</td><td>{stats.get("total_input_tokens", 0):,}</td></tr>\n')
+                        f.write(f'            <tr><td>Total output tokens</td><td>{stats.get("total_output_tokens", 0):,}</td></tr>\n')
+                        cache_t = stats.get("total_cache_read_tokens", 0)
+                        if cache_t:
+                            f.write(f'            <tr><td>Cache read tokens</td><td>{cache_t:,}</td></tr>\n')
+                        duration_ms = stats.get("total_duration_ms", 0)
+                        if duration_ms:
+                            mins = duration_ms // 60000
+                            secs = (duration_ms % 60000) / 1000
+                            f.write(f'            <tr><td>Total duration</td><td>{mins}m {secs:.0f}s</td></tr>\n')
+                        ver = stats.get("session_version", "")
+                        if ver:
+                            f.write(f'            <tr><td>Claude Code version</td><td>{ver}</td></tr>\n')
+                        branch = stats.get("git_branch", "")
+                        if branch:
+                            f.write(f'            <tr><td>Git branch</td><td>{branch}</td></tr>\n')
+                        f.write('        </table>\n')
+                        tools = stats.get("tools_used", {})
+                        if tools:
+                            f.write('        <div><strong>Tools breakdown:</strong><ul>\n')
+                            for tool_name, count in sorted(tools.items(), key=lambda x: -x[1]):
+                                f.write(f'            <li>{tool_name}: {count}</li>\n')
+                            f.write('        </ul></div>\n')
                 else:
                     f.write(f'        <div class="content">{content}</div>\n')
 
@@ -2283,7 +2489,7 @@ class ClaudeConversationExtractor:
         self, sessions: List[Path], indices: List[int],
         format: str = "markdown", detailed: bool = False,
         by_day: bool = False, by_project: bool = False,
-        overwrite: bool = False
+        overwrite: bool = False, include_thinking: bool = False
     ) -> Tuple[int, int]:
         """Extract multiple sessions by index.
 
@@ -2295,6 +2501,7 @@ class ClaudeConversationExtractor:
             by_day: If True, save to date-based subdirectories (YYYY-MM-DD)
             by_project: If True, save to project-based subdirectories
             overwrite: If True, overwrite existing files; if False (default), skip them
+            include_thinking: If True, include Claude's thinking/reasoning blocks
         """
         success = 0
         skipped = 0
@@ -2324,7 +2531,10 @@ class ClaudeConversationExtractor:
                         print(f"⏭️  Skipped: {rel_path} (already exists)")
                         continue
 
-                conversation = self.extract_conversation(session_path, detailed=detailed)
+                conversation = self.extract_conversation(
+                    session_path, detailed=detailed,
+                    include_thinking=include_thinking
+                )
                 if conversation:
                     # Extract project name from path if needed
                     project_name = self._get_project_name(session_path) if by_project else None
@@ -2617,6 +2827,11 @@ Examples:
         help="Include tool use, MCP responses, and system messages in export"
     )
     parser.add_argument(
+        "--thinking",
+        action="store_true",
+        help="Include Claude's thinking/reasoning blocks in output"
+    )
+    parser.add_argument(
         "--by-day",
         action="store_true",
         help="Organize extracted conversations into date folders (YYYY-MM-DD)"
@@ -2820,7 +3035,10 @@ Examples:
                         # Offer to extract after viewing
                         extract_choice = input("\n📤 Extract this conversation? (y/N): ").strip().lower()
                         if extract_choice == 'y':
-                            conversation = extractor.extract_conversation(selected_path, detailed=args.detailed)
+                            conversation = extractor.extract_conversation(
+                                selected_path, detailed=args.detailed,
+                                include_thinking=args.thinking
+                            )
                             if conversation:
                                 session_id = selected_path.stem
                                 if args.format == "json":
@@ -2915,7 +3133,10 @@ Examples:
             if args.detailed:
                 print("📋 Including detailed tool use and system messages")
 
-            conversation = extractor.extract_conversation(session_path, detailed=args.detailed)
+            conversation = extractor.extract_conversation(
+                session_path, detailed=args.detailed,
+                include_thinking=args.thinking
+            )
             if conversation:
                 output = extractor.save_conversation(
                     conversation, session_id,
@@ -2995,7 +3216,7 @@ Examples:
                 success, total = extractor.extract_multiple(
                     sessions, indices, format=args.format, detailed=args.detailed,
                     by_day=args.by_day, by_project=args.by_project,
-                    overwrite=args.overwrite
+                    overwrite=args.overwrite, include_thinking=args.thinking
                 )
                 print(f"\n✅ Successfully extracted {success}/{total} sessions")
 
@@ -3076,7 +3297,7 @@ Examples:
             success, total = extractor.extract_multiple(
                 sessions, indices, format=args.format, detailed=args.detailed,
                 by_day=args.by_day, by_project=args.by_project,
-                overwrite=args.overwrite
+                overwrite=args.overwrite, include_thinking=args.thinking
             )
             print(f"\n✅ Successfully extracted {success}/{total} sessions")
 
@@ -3156,7 +3377,7 @@ Examples:
             success, total = extractor.extract_multiple(
                 sessions, indices, format=args.format, detailed=args.detailed,
                 by_day=args.by_day, by_project=args.by_project,
-                overwrite=args.overwrite
+                overwrite=args.overwrite, include_thinking=args.thinking
             )
             print(f"\n✅ Successfully extracted {success}/{total} sessions")
 

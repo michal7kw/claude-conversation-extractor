@@ -166,6 +166,11 @@ class ConversationSearcher:
 
         # Find all JSONL files
         jsonl_files = list(search_dir.rglob("*.jsonl"))
+        # Exclude subagent conversation files
+        jsonl_files = [
+            f for f in jsonl_files
+            if "/subagents/" not in str(f) and "\\subagents\\" not in str(f)
+        ]
         if not jsonl_files:
             return []
 
@@ -704,6 +709,11 @@ class ConversationSearcher:
             search_dir = Path.home() / ".claude" / "projects"
 
         jsonl_files = list(search_dir.rglob("*.jsonl"))
+        # Exclude subagent conversation files
+        jsonl_files = [
+            f for f in jsonl_files
+            if "/subagents/" not in str(f) and "\\subagents\\" not in str(f)
+        ]
         return self._filter_files_by_date(jsonl_files, date_from, date_to)
 
     def get_conversation_topics(
@@ -766,6 +776,11 @@ def create_search_index(search_dir: Path, output_file: Path) -> None:
     index = {"created": datetime.now().isoformat(), "conversations": {}}
 
     jsonl_files = list(search_dir.rglob("*.jsonl"))
+    # Exclude subagent conversation files
+    jsonl_files = [
+        f for f in jsonl_files
+        if "/subagents/" not in str(f) and "\\subagents\\" not in str(f)
+    ]
 
     for jsonl_file in jsonl_files:
         conv_id = jsonl_file.stem

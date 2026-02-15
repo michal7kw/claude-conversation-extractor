@@ -656,5 +656,113 @@ class TestClaudeConversationExtractor(unittest.TestCase):
         self.assertEqual(tool_ops["search"]["Grep"][0]["input"]["pattern"], "def test_")
 
 
+    def test_markdown_thinking_rendering(self):
+        """Test thinking blocks render in collapsible details tag."""
+        conversation = [
+            {"role": "thinking", "content": "Let me think about this...",
+             "timestamp": "2026-01-15T10:00:00Z"},
+            {"role": "assistant", "content": "Here's my answer.",
+             "timestamp": "2026-01-15T10:00:01Z"},
+        ]
+        result = self.extractor.save_as_markdown(conversation, "test-session")
+        content = result.read_text()
+        self.assertIn("<details>", content)
+        self.assertIn("Thinking", content)
+        self.assertIn("Let me think about this...", content)
+        self.assertIn("</details>", content)
+
+    def test_markdown_subagent_rendering(self):
+        """Test subagent blocks render with proper headers."""
+        conversation = [
+            {"role": "user", "content": "Do research",
+             "timestamp": "2026-01-15T10:00:00Z"},
+            {"role": "subagent", "description": "Explore codebase",
+             "subagent_type": "Explore", "agent_id": "abc123",
+             "model": "claude-haiku-4-5", "timestamp": "2026-01-15T10:00:01Z",
+             "messages": [
+                 {"role": "user", "content": "Find Python files", "timestamp": ""},
+                 {"role": "assistant", "content": "Found 5 files.", "timestamp": ""},
+             ]},
+        ]
+        result = self.extractor.save_as_markdown(conversation, "test-session")
+        content = result.read_text()
+        self.assertIn("Subagent", content)
+        self.assertIn("Explore codebase", content)
+        self.assertIn("abc123", content)
+        self.assertIn("haiku", content)
+        self.assertIn("Find Python files", content)
+        self.assertIn("Found 5 files", content)
+
+    def test_markdown_stats_rendering(self):
+        """Test stats block renders as a table."""
+        conversation = [
+            {"role": "user", "content": "Hello",
+             "timestamp": "2026-01-15T10:00:00Z"},
+            {"role": "stats", "content": {
+                "models_used": ["claude-opus-4-6"],
+                "total_input_tokens": 5000,
+                "total_output_tokens": 1000,
+                "total_cache_read_tokens": 3000,
+                "total_cache_creation_tokens": 0,
+                "turn_count": 3,
+                "tool_use_count": 5,
+                "tools_used": {"Bash": 3, "Read": 2},
+                "subagent_count": 1,
+                "total_duration_ms": 45000,
+                "session_version": "2.1.42",
+                "git_branch": "main",
+            }, "timestamp": ""},
+        ]
+        result = self.extractor.save_as_markdown(conversation, "test-session")
+        content = result.read_text()
+        self.assertIn("Statistics", content)
+        self.assertIn("claude-opus-4-6", content)
+        self.assertIn("5,000", content)
+        self.assertIn("Bash", content)
+
+    def test_markdown_metadata_rendering(self):
+        """Test per-message metadata renders in detailed mode."""
+        conversation = [
+            {"role": "assistant", "content": "Hello!",
+             "timestamp": "2026-01-15T10:00:00Z",
+             "metadata": {
+                 "model": "claude-opus-4-6",
+                 "input_tokens": 1500,
+                 "output_tokens": 200,
+                 "cache_read_tokens": 1000,
+                 "cwd": "/test",
+                 "git_branch": "main",
+             }},
+        ]
+        result = self.extractor.save_as_markdown(conversation, "test-session")
+        content = result.read_text()
+        self.assertIn("claude-opus-4-6", content)
+        self.assertIn("1,500", content)
+
+    def test_html_new_roles(self):
+        """Test HTML formatter handles new roles without errors."""
+        conversation = [
+            {"role": "user", "content": "Hello", "timestamp": "2026-01-15T10:00:00Z"},
+            {"role": "thinking", "content": "Hmm...", "timestamp": "2026-01-15T10:00:01Z"},
+            {"role": "assistant", "content": "Hi!", "timestamp": "2026-01-15T10:00:02Z",
+             "metadata": {"model": "opus", "input_tokens": 100, "output_tokens": 50,
+                           "cache_read_tokens": 0, "cwd": "/test", "git_branch": "main"}},
+            {"role": "subagent", "description": "Task", "agent_id": "x", "model": "haiku",
+             "subagent_type": "Explore", "timestamp": "",
+             "messages": [{"role": "assistant", "content": "Done.", "timestamp": ""}]},
+            {"role": "stats", "content": {"models_used": ["opus"], "total_input_tokens": 100,
+             "total_output_tokens": 50, "total_cache_read_tokens": 0,
+             "total_cache_creation_tokens": 0, "turn_count": 1, "tool_use_count": 0,
+             "tools_used": {}, "subagent_count": 1, "total_duration_ms": 1000,
+             "session_version": "2.1.42", "git_branch": "main"}, "timestamp": ""},
+        ]
+        result = self.extractor.save_as_html(conversation, "test-session")
+        self.assertIsNotNone(result)
+        content = result.read_text()
+        self.assertIn("Thinking", content)
+        self.assertIn("Subagent", content)
+        self.assertIn("Statistics", content)
+
+
 if __name__ == "__main__":
     unittest.main()
