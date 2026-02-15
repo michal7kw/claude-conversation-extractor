@@ -569,5 +569,92 @@ class TestClaudeConversationExtractor(unittest.TestCase):
         self.assertEqual(len(subagent_msgs), 0)
 
 
+    def test_bash_commands_new_format(self):
+        """Test bash command extraction with new-format tool results in user content."""
+        import json
+        from fixtures.sample_conversations import (
+            make_user_entry, make_assistant_entry,
+            make_user_entry_with_tool_results, write_jsonl
+        )
+
+        tool_use_id = "toolu_bash_001"
+        jsonl_file = Path(self.temp_dir) / "test.jsonl"
+        entries = [
+            make_user_entry("List files"),
+            make_assistant_entry("Let me check.", tool_uses=[
+                {"id": tool_use_id, "name": "Bash", "input": {"command": "ls -la"}}
+            ]),
+            make_user_entry_with_tool_results([
+                {"tool_use_id": tool_use_id, "content": "total 8\nfile1.py\nfile2.py"}
+            ]),
+            make_assistant_entry("Found file1.py and file2.py."),
+        ]
+        write_jsonl(jsonl_file, entries)
+
+        commands = self.extractor.extract_bash_commands(jsonl_file)
+
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(commands[0]["command"], "ls -la")
+        self.assertIn("check", commands[0]["context"].lower())
+
+    def test_bash_commands_error_skipped(self):
+        """Test that failed bash commands are excluded."""
+        import json
+        from fixtures.sample_conversations import (
+            make_user_entry, make_assistant_entry,
+            make_user_entry_with_tool_results, write_jsonl
+        )
+
+        tool_use_id = "toolu_bash_002"
+        jsonl_file = Path(self.temp_dir) / "test.jsonl"
+        entries = [
+            make_user_entry("Run something"),
+            make_assistant_entry("Running.", tool_uses=[
+                {"id": tool_use_id, "name": "Bash", "input": {"command": "nonexistent_cmd"}}
+            ]),
+            make_user_entry_with_tool_results([
+                {"tool_use_id": tool_use_id, "content": "command not found: nonexistent_cmd"}
+            ]),
+        ]
+        write_jsonl(jsonl_file, entries)
+
+        commands = self.extractor.extract_bash_commands(jsonl_file)
+        self.assertEqual(len(commands), 0)
+
+    def test_tool_ops_new_format(self):
+        """Test tool operations extraction with new-format entries."""
+        import json
+        from fixtures.sample_conversations import (
+            make_user_entry, make_assistant_entry,
+            make_user_entry_with_tool_results, write_jsonl
+        )
+
+        read_id = "toolu_read_001"
+        grep_id = "toolu_grep_001"
+        jsonl_file = Path(self.temp_dir) / "test.jsonl"
+        entries = [
+            make_user_entry("Find all test files"),
+            make_assistant_entry("Let me search.", tool_uses=[
+                {"id": grep_id, "name": "Grep", "input": {"pattern": "def test_", "path": "tests/"}},
+            ]),
+            make_user_entry_with_tool_results([
+                {"tool_use_id": grep_id, "content": "tests/test_main.py:5:def test_hello"}
+            ]),
+            make_assistant_entry("Found a test. Let me read it.", tool_uses=[
+                {"id": read_id, "name": "Read", "input": {"file_path": "tests/test_main.py"}},
+            ]),
+            make_user_entry_with_tool_results([
+                {"tool_use_id": read_id, "content": "def test_hello():\n    assert True"}
+            ]),
+        ]
+        write_jsonl(jsonl_file, entries)
+
+        tool_ops = self.extractor.extract_tool_operations(jsonl_file)
+
+        self.assertEqual(len(tool_ops["search"]["Grep"]), 1)
+        self.assertEqual(len(tool_ops["file"]["Read"]), 1)
+        self.assertEqual(tool_ops["search"]["Grep"][0]["input"]["pattern"], "def test_")
+
+
 if __name__ == "__main__":
     unittest.main()

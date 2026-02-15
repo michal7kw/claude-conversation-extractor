@@ -639,77 +639,61 @@ class ClaudeConversationExtractor:
                         elif isinstance(content, str) and content.strip():
                             current_context.append(content.strip())
 
-                # Handle standalone tool_use entries (some logs have them separate)
-                elif entry_type == "tool_use":
-                    tool_data = entry.get("tool", {})
-                    tool_name = tool_data.get("name", "").lower()
-                    if tool_name == "bash":
-                        tool_input = tool_data.get("input", {})
-                        command = tool_input.get("command", "")
-                        tool_use_id = entry.get("tool_use_id", "") or entry.get("id", "")
-                        if command:
-                            pending_bash_commands.append({
-                                "command": command,
-                                "context": "\n\n".join(current_context),
-                                "timestamp": entry.get("timestamp", ""),
-                                "tool_use_id": tool_use_id,
-                            })
-                            current_context = []
-
-                # Check tool_result entries to see if commands succeeded
-                elif entry_type == "tool_result":
-                    result = entry.get("result", {})
-                    tool_use_id = entry.get("tool_use_id", "")
-
-                    # Check if this result has an error
-                    has_error = bool(result.get("error"))
-
-                    # Also check for common error indicators in output
-                    output = result.get("output", "")
-                    is_error_output = False
-                    if output:
-                        # Check for common error patterns
-                        error_patterns = [
-                            "command not found",
-                            "No such file or directory",
-                            "Permission denied",
-                            "fatal:",
-                            "error:",
-                            "Error:",
-                            "FAILED",
-                        ]
-                        # Only mark as error if it's clearly an error, not just contains the word
-                        first_line = output.split('\n')[0].lower() if output else ""
-                        is_error_output = any(
-                            pattern.lower() in first_line
-                            for pattern in error_patterns[:4]  # Only check definitive error patterns
-                        )
-
-                    # Match with pending commands
-                    if pending_bash_commands:
-                        # If we have a tool_use_id, try to match it
-                        matched_cmd = None
-                        if tool_use_id:
-                            for cmd in pending_bash_commands:
-                                if cmd.get("tool_use_id") == tool_use_id:
-                                    matched_cmd = cmd
-                                    pending_bash_commands.remove(cmd)
-                                    break
-
-                        # Otherwise, match with the oldest pending command
-                        if not matched_cmd and pending_bash_commands:
-                            matched_cmd = pending_bash_commands.pop(0)
-
-                        # Only add if successful (no error)
-                        if matched_cmd and not has_error and not is_error_output:
-                            bash_commands.append({
-                                "command": matched_cmd["command"],
-                                "context": matched_cmd["context"],
-                                "timestamp": matched_cmd["timestamp"],
-                            })
-
-                # Reset context on user messages (new turn)
+                # Extract tool_results from user message content arrays
                 elif entry_type == "user":
+                    msg = entry.get("message", {})
+                    if isinstance(msg, dict):
+                        content = msg.get("content", [])
+                        if isinstance(content, list):
+                            for item in content:
+                                if isinstance(item, dict) and item.get("type") == "tool_result":
+                                    tool_use_id = item.get("tool_use_id", "")
+                                    result_content = item.get("content", "")
+
+                                    # Normalize result content (can be string or list of text blocks)
+                                    if isinstance(result_content, list):
+                                        result_content = "\n".join(
+                                            b.get("text", "") for b in result_content
+                                            if isinstance(b, dict)
+                                        )
+                                    result_content = str(result_content)
+
+                                    # Check for errors
+                                    has_error = False
+                                    error_patterns = [
+                                        "command not found",
+                                        "No such file or directory",
+                                        "Permission denied",
+                                        "fatal:",
+                                    ]
+                                    first_line = (
+                                        result_content.split('\n')[0].lower()
+                                        if result_content else ""
+                                    )
+                                    has_error = any(
+                                        pattern.lower() in first_line
+                                        for pattern in error_patterns
+                                    )
+
+                                    # Match with pending commands
+                                    matched_cmd = None
+                                    if tool_use_id:
+                                        for cmd in pending_bash_commands:
+                                            if cmd.get("tool_use_id") == tool_use_id:
+                                                matched_cmd = cmd
+                                                pending_bash_commands.remove(cmd)
+                                                break
+
+                                    if not matched_cmd and pending_bash_commands:
+                                        matched_cmd = pending_bash_commands.pop(0)
+
+                                    if matched_cmd and not has_error:
+                                        bash_commands.append({
+                                            "command": matched_cmd["command"],
+                                            "context": matched_cmd["context"],
+                                            "timestamp": matched_cmd["timestamp"],
+                                        })
+
                     current_context = []
 
         except Exception as e:
@@ -835,61 +819,36 @@ class ClaudeConversationExtractor:
                         elif isinstance(content, str) and content.strip():
                             current_context.append(content.strip())
 
-                # Handle standalone tool_use entries
-                elif entry_type == "tool_use":
-                    tool_data = entry.get("tool", {})
-                    tool_name = tool_data.get("name", "")
-                    tool_input = tool_data.get("input", {})
-                    tool_use_id = entry.get("tool_use_id", "") or entry.get("id", "")
-
-                    if tool_name in extract_tools:
-                        pending_tool_ops[tool_use_id] = {
-                            "tool_name": tool_name,
-                            "context": "\n\n".join(current_context),
-                            "timestamp": entry.get("timestamp", ""),
-                            "tool_use_id": tool_use_id,
-                            "input": tool_input,
-                        }
-                        current_context = []
-                    elif tool_name == "Bash" and "git" in extract_categories:
-                        command = tool_input.get("command", "")
-                        if self._is_git_command(command):
-                            pending_tool_ops[tool_use_id] = {
-                                "tool_name": "Bash",
-                                "is_git": True,
-                                "context": "\n\n".join(current_context),
-                                "timestamp": entry.get("timestamp", ""),
-                                "tool_use_id": tool_use_id,
-                                "input": tool_input,
-                            }
-                            current_context = []
-
-                # Match tool_result entries with pending tool operations
-                elif entry_type == "tool_result":
-                    tool_use_id = entry.get("tool_use_id", "")
-                    result = entry.get("result", {})
-
-                    if tool_use_id in pending_tool_ops:
-                        tool_op = pending_tool_ops.pop(tool_use_id)
-                        tool_name = tool_op["tool_name"]
-
-                        # Summarize or include full result based on detailed flag
-                        tool_op["result"] = self._summarize_tool_result(
-                            tool_name, result, tool_op.get("input", {}), detailed
-                        )
-
-                        # Categorize the tool operation
-                        if tool_op.get("is_git"):
-                            tool_ops["git"].append(tool_op)
-                        elif tool_name in TOOL_CATEGORIES["file"]:
-                            tool_ops["file"][tool_name].append(tool_op)
-                        elif tool_name in TOOL_CATEGORIES["search"]:
-                            tool_ops["search"][tool_name].append(tool_op)
-                        elif tool_name in TOOL_CATEGORIES["web"]:
-                            tool_ops["web"][tool_name].append(tool_op)
-
-                # Reset context on user messages
+                # Extract tool_results from user message content arrays
                 elif entry_type == "user":
+                    msg = entry.get("message", {})
+                    if isinstance(msg, dict):
+                        content = msg.get("content", [])
+                        if isinstance(content, list):
+                            for item in content:
+                                if isinstance(item, dict) and item.get("type") == "tool_result":
+                                    tool_use_id = item.get("tool_use_id", "")
+                                    result_content = item.get("content", "")
+
+                                    if tool_use_id in pending_tool_ops:
+                                        tool_op = pending_tool_ops.pop(tool_use_id)
+                                        tool_name = tool_op["tool_name"]
+
+                                        result = self._normalize_tool_result(result_content)
+                                        tool_op["result"] = self._summarize_tool_result(
+                                            tool_name, result, tool_op.get("input", {}), detailed
+                                        )
+
+                                        # Categorize the tool operation
+                                        if tool_op.get("is_git"):
+                                            tool_ops["git"].append(tool_op)
+                                        elif tool_name in TOOL_CATEGORIES["file"]:
+                                            tool_ops["file"][tool_name].append(tool_op)
+                                        elif tool_name in TOOL_CATEGORIES["search"]:
+                                            tool_ops["search"][tool_name].append(tool_op)
+                                        elif tool_name in TOOL_CATEGORIES["web"]:
+                                            tool_ops["web"][tool_name].append(tool_op)
+
                     current_context = []
 
             # Handle any pending tool operations without results
@@ -910,6 +869,16 @@ class ClaudeConversationExtractor:
             print(f"❌ Error extracting tool operations from {jsonl_path}: {e}")
 
         return tool_ops
+
+    def _normalize_tool_result(self, result_content) -> Dict:
+        """Normalize new-format tool result content to old result dict format."""
+        if isinstance(result_content, list):
+            text = "\n".join(
+                b.get("text", "") for b in result_content if isinstance(b, dict)
+            )
+        else:
+            text = str(result_content)
+        return {"output": text}
 
     def _summarize_tool_result(
         self, tool_name: str, result: dict, tool_input: dict, detailed: bool = False
