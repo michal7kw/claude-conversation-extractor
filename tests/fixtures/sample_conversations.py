@@ -5,7 +5,157 @@ Sample conversations for testing search functionality
 
 import json
 import tempfile
+import uuid as _uuid
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# New-format JSONL entry factories for testing.
+# These produce entries matching Claude Code's new JSONL format with all
+# required fields (uuid, sessionId, isSidechain, version, gitBranch, cwd,
+# parentUuid, userType) plus the new message structures.
+# ---------------------------------------------------------------------------
+
+_COUNTER = {"ts": 0}
+
+
+def _make_uuid():
+    return str(_uuid.uuid4())
+
+
+def _next_ts():
+    _COUNTER["ts"] += 1
+    return f"2026-01-15T10:{_COUNTER['ts']:02d}:00.000Z"
+
+
+def _base_fields(entry_type, session_id="test-session-id", is_sidechain=False,
+                 agent_id=None, timestamp=None, parent_uuid=None):
+    fields = {
+        "type": entry_type,
+        "uuid": _make_uuid(),
+        "parentUuid": parent_uuid,
+        "sessionId": session_id,
+        "timestamp": timestamp or _next_ts(),
+        "isSidechain": is_sidechain,
+        "userType": "external",
+        "cwd": "/test/project",
+        "version": "2.1.42",
+        "gitBranch": "main",
+    }
+    if agent_id:
+        fields["agentId"] = agent_id
+    return fields
+
+
+def make_user_entry(text, session_id="test-session-id", **kwargs):
+    """Create a new-format user entry with string content."""
+    entry = _base_fields("user", session_id=session_id, **kwargs)
+    entry["message"] = {"role": "user", "content": text}
+    return entry
+
+
+def make_user_entry_with_tool_results(tool_results, session_id="test-session-id", **kwargs):
+    """Create a new-format user entry with tool_result blocks in content array.
+    tool_results: list of dicts with keys: tool_use_id, content
+    """
+    entry = _base_fields("user", session_id=session_id, **kwargs)
+    content = []
+    for tr in tool_results:
+        content.append({
+            "type": "tool_result",
+            "tool_use_id": tr["tool_use_id"],
+            "content": tr.get("content", ""),
+        })
+    entry["message"] = {"role": "user", "content": content}
+    return entry
+
+
+def make_assistant_entry(text, tool_uses=None, model="claude-opus-4-6",
+                         thinking=None, session_id="test-session-id", **kwargs):
+    """Create a new-format assistant entry.
+    tool_uses: list of dicts with keys: id, name, input
+    thinking: optional string for thinking block
+    """
+    entry = _base_fields("assistant", session_id=session_id, **kwargs)
+    content = []
+    if thinking:
+        content.append({"type": "thinking", "thinking": thinking, "signature": "test-sig"})
+    if text:
+        content.append({"type": "text", "text": text})
+    for tu in (tool_uses or []):
+        content.append({
+            "type": "tool_use",
+            "id": tu.get("id", f"toolu_{_make_uuid().replace('-', '')[:24]}"),
+            "name": tu["name"],
+            "input": tu.get("input", {}),
+        })
+    entry["message"] = {
+        "model": model,
+        "id": f"msg_{_make_uuid().replace('-', '')[:24]}",
+        "type": "message",
+        "role": "assistant",
+        "content": content,
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 1000,
+            "output_tokens": 200,
+            "cache_read_input_tokens": 5000,
+            "cache_creation_input_tokens": 0,
+        },
+    }
+    entry["requestId"] = f"req_{_make_uuid().replace('-', '')[:24]}"
+    return entry
+
+
+def make_progress_entry(hook_event="SessionStart", hook_name="SessionStart:startup",
+                        session_id="test-session-id", **kwargs):
+    """Create a new-format progress entry."""
+    entry = _base_fields("progress", session_id=session_id, **kwargs)
+    entry["data"] = {
+        "type": "hook_progress",
+        "hookEvent": hook_event,
+        "hookName": hook_name,
+        "command": "/bin/test-hook.sh",
+    }
+    tid = _make_uuid()
+    entry["parentToolUseID"] = tid
+    entry["toolUseID"] = tid
+    return entry
+
+
+def make_system_entry(subtype="turn_duration", content="", duration_ms=5000,
+                      session_id="test-session-id", **kwargs):
+    """Create a new-format system entry."""
+    entry = _base_fields("system", session_id=session_id, **kwargs)
+    entry["subtype"] = subtype
+    entry["content"] = content
+    entry["level"] = "info"
+    entry["isMeta"] = False
+    if subtype == "turn_duration":
+        entry["durationMs"] = duration_ms
+    return entry
+
+
+def make_file_history_snapshot_entry():
+    """Create a file-history-snapshot entry (should be skipped by extractor)."""
+    return {
+        "type": "file-history-snapshot",
+        "messageId": _make_uuid(),
+        "snapshot": {"messageId": _make_uuid(), "trackedFileBackups": {}, "timestamp": _next_ts()},
+        "isSnapshotUpdate": False,
+    }
+
+
+def write_jsonl(path, entries):
+    """Write entries to a JSONL file."""
+    with open(path, "w", encoding="utf-8") as f:
+        for entry in entries:
+            f.write(json.dumps(entry) + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Original sample conversation data for search tests (DO NOT MODIFY below)
+# ---------------------------------------------------------------------------
 
 # Sample conversation data that covers various scenarios
 SAMPLE_CONVERSATIONS = [
