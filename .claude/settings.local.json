@@ -9,7 +9,16 @@
       "Bash(python3:*)",
       "Bash(find:*)",
       "Bash(ls:*)",
-      "Bash(pip show:*)"
+      "Bash(pip show:*)",
+      "mcp__plugin_serena_serena__get_symbols_overview",
+      "Bash(done)",
+      "mcp__plugin_serena_serena__activate_project",
+      "mcp__plugin_serena_serena__find_symbol",
+      "mcp__plugin_serena_serena__think_about_collected_information",
+      "Bash(pip install:*)",
+      "Bash(git stash:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }

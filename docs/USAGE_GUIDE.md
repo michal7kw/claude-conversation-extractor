@@ -1,29 +1,39 @@
 # Claude Conversation Extractor - Complete Usage Guide
 
-A comprehensive guide to all CLI commands and options for extracting Claude Code conversations.
+A comprehensive guide to extracting, searching, and analyzing your Claude Code conversation history.
 
 ---
 
 ## Table of Contents
 
 1. [Quick Start](#quick-start)
-2. [Basic Commands](#basic-commands)
-3. [Extraction Options](#extraction-options)
-4. [Output Formats](#output-formats)
-5. [Organization Options](#organization-options)
-6. [Date Filtering](#date-filtering)
-7. [Project Filtering](#project-filtering)
-8. [Search Operations](#search-operations)
-9. [Bash Commands Extraction](#bash-commands-extraction)
-10. [Tool Operations Extraction](#tool-operations-extraction)
-11. [Combined Examples](#combined-examples)
-12. [Automation & Scripting](#automation--scripting)
+2. [How It Works](#how-it-works)
+3. [Listing and Browsing Sessions](#listing-and-browsing-sessions)
+4. [Extracting Conversations](#extracting-conversations)
+5. [Output Formats](#output-formats)
+6. [Detailed Mode, Thinking, and Metadata](#detailed-mode-thinking-and-metadata)
+7. [Subagent Conversations](#subagent-conversations)
+8. [Organization Options](#organization-options)
+9. [Date Filtering](#date-filtering)
+10. [Project Filtering](#project-filtering)
+11. [Session ID Lookup](#session-id-lookup)
+12. [Search Operations](#search-operations)
+13. [Bash Commands Extraction](#bash-commands-extraction)
+14. [Tool Operations Extraction](#tool-operations-extraction)
+15. [Cross-Platform Usage (Windows, WSL, macOS, Linux)](#cross-platform-usage)
+16. [Combined Examples and Recipes](#combined-examples-and-recipes)
+17. [Automation and Scripting](#automation-and-scripting)
+18. [Quick Reference](#quick-reference)
 
 ---
 
 ## Quick Start
 
 ```bash
+# Install
+pip install claude-conversation-extractor
+# or: pipx install claude-conversation-extractor
+
 # Interactive UI (recommended for first-time users)
 claude-start
 
@@ -37,49 +47,91 @@ claude-extract --extract 1
 claude-extract --all
 ```
 
+After extracting, files are saved to `~/Desktop/Claude logs/` (or `~/Documents/Claude logs/` if Desktop is unavailable). Use `--output` to change the destination.
+
 ---
 
-## Basic Commands
+## How It Works
+
+Claude Code stores every conversation as a JSONL file in `~/.claude/projects/`. Each project directory corresponds to a working directory where you've used Claude Code.
+
+```
+~/.claude/projects/
+  mnt-d-Github-myproject/
+    abc12345-6789-...jsonl          <- main conversation
+    abc12345-6789-.../
+      subagents/
+        agent-a1b2c3d4.jsonl        <- subagent conversation
+        agent-e5f6g7h8.jsonl        <- another subagent
+  home-user-another-project/
+    def98765-4321-...jsonl
+```
+
+This tool reads those JSONL files and converts them into clean, readable Markdown, HTML, or JSON. It also handles:
+
+- **Subagent conversations** (Task tool invocations that spawn separate agents)
+- **Thinking blocks** (Claude's internal reasoning, when using extended thinking models)
+- **Tool interactions** (Bash, Read, Write, Edit, Grep, Glob, WebFetch, etc.)
+- **Plans and Q&A pairs** (detected automatically from conversation patterns)
+- **Session statistics** (token usage, model info, tool counts, duration)
+
+---
+
+## Listing and Browsing Sessions
+
+### List Recent Sessions
+
+```bash
+# List all sessions (sorted by most recent)
+claude-extract --list
+
+# Limit to 10 most recent
+claude-extract --list --limit 10
+```
+
+Each listing shows:
+- Project directory name
+- Session ID (first 8 characters of UUID)
+- Last modified date
+- Message count and file size
+- Preview of the first user message
+
+### List Projects
+
+```bash
+# Show all projects where you've used Claude Code
+claude-extract --list-projects
+```
 
 ### Interactive Mode
 
 ```bash
-# Launch interactive UI with ASCII art and menus
+# Launch interactive UI with menus
 claude-start
 
-# Alternative commands (same as claude-start)
-claude-extract
+# Alternative aliases (all identical)
+claude-extract        # with no arguments
 claude-logs
+claude-extract -i
+claude-extract --interactive
 ```
 
-### Listing Sessions
-
-```bash
-# List all available sessions
-claude-extract --list
-
-# List all projects
-claude-extract --list-projects
-```
-
-### Direct Search
-
-```bash
-# Launch search interface
-claude-search
-
-# Search with a query
-claude-search "API integration"
-```
+The interactive UI provides:
+- ASCII art banner
+- Menu-driven session selection
+- Real-time search
+- One-click extraction
 
 ---
 
-## Extraction Options
+## Extracting Conversations
 
-### Extract Specific Sessions
+### By Session Number
+
+Session numbers correspond to the listing order (1 = most recent).
 
 ```bash
-# Extract session #1 (most recent)
+# Extract the most recent session
 claude-extract --extract 1
 
 # Extract session #5
@@ -88,44 +140,50 @@ claude-extract --extract 5
 # Extract multiple specific sessions
 claude-extract --extract 1,3,5
 
-# Extract sessions 1 through 5
+# Extract a range (sessions 1 through 5)
 claude-extract --extract 1,2,3,4,5
 ```
 
-### Extract Recent Sessions
+### By Count (Most Recent)
 
 ```bash
 # Extract 5 most recent sessions
 claude-extract --recent 5
 
-# Extract 10 most recent sessions
-claude-extract --recent 10
-
-# Extract 20 most recent sessions
+# Extract 20 most recent
 claude-extract --recent 20
 ```
 
-### Extract All Sessions
+### All Sessions
 
 ```bash
-# Extract all available sessions
+# Extract every session
 claude-extract --all
-
-# Extract all with custom output directory
-claude-extract --all --output ~/my-claude-logs
 ```
 
 ### Custom Output Directory
 
 ```bash
-# Specify output directory
+# Save to a specific directory
 claude-extract --output ~/Documents/claude-logs --extract 1
 
-# Use current directory
+# Save to current directory
 claude-extract --output . --all
 
-# Use absolute path
+# Absolute path
 claude-extract --output /home/user/backups/claude --all
+```
+
+### Overwrite vs Skip
+
+By default, existing files are skipped. Use `--overwrite` to replace them:
+
+```bash
+# Skip existing files (default)
+claude-extract --all
+
+# Overwrite existing files
+claude-extract --overwrite --all
 ```
 
 ---
@@ -134,57 +192,166 @@ claude-extract --output /home/user/backups/claude --all
 
 ### Markdown (Default)
 
-```bash
-# Export as Markdown (default)
-claude-extract --extract 1
+Clean, readable markdown with emoji headers, timestamps, and formatted code blocks.
 
-# Explicit Markdown format
-claude-extract --format markdown --extract 1
+```bash
+claude-extract --extract 1
+claude-extract --format markdown --extract 1   # explicit
 ```
 
-### JSON
+Output example:
+```markdown
+# Claude Conversation Log
+**Date:** 2026-02-15 | **Session:** abc12345
 
-```bash
-# Export as JSON
-claude-extract --format json --extract 1
+---
 
-# Export all as JSON
-claude-extract --format json --all
+## User
+Hello, can you help me refactor this function?
 
-# JSON with custom output
-claude-extract --format json --all --output ~/claude-json
+---
+
+## Claude
+Sure! Let me look at the code...
 ```
 
 ### HTML
 
+Styled HTML with dark theme, syntax highlighting, and collapsible sections.
+
 ```bash
-# Export as styled HTML
 claude-extract --format html --extract 1
-
-# Export all as HTML
 claude-extract --format html --all
-
-# HTML with detailed mode
-claude-extract --format html --detailed --extract 1
 ```
 
-### Detailed Mode
+### JSON
 
-Include tool invocations, MCP responses, and system messages:
+Machine-readable JSON with full metadata. Ideal for programmatic analysis.
 
 ```bash
-# Detailed Markdown
+claude-extract --format json --extract 1
+claude-extract --format json --all --output ~/claude-json
+```
+
+---
+
+## Detailed Mode, Thinking, and Metadata
+
+### Detailed Mode (`--detailed`)
+
+Includes tool invocations, system messages, MCP responses, per-message metadata, and session statistics.
+
+```bash
+# Detailed markdown
 claude-extract --detailed --extract 1
 
-# Detailed JSON
-claude-extract --detailed --format json --extract 1
-
-# Detailed HTML
+# Detailed HTML (great for browsing)
 claude-extract --detailed --format html --extract 1
 
-# Detailed with all sessions
-claude-extract --detailed --all
+# Detailed JSON (for analysis)
+claude-extract --detailed --format json --all
 ```
+
+In detailed mode, each assistant message includes metadata:
+
+```markdown
+## Claude
+> *model: claude-opus-4-6 | tokens: 3500->120 | cache read: 40,000*
+
+Here's how to refactor that function...
+```
+
+And a statistics block is appended at the end:
+
+```markdown
+## Session Statistics
+
+| Metric | Value |
+|--------|-------|
+| Models | claude-opus-4-6 |
+| User turns | 15 |
+| Tool invocations | 47 |
+| Subagents spawned | 3 |
+| Total input tokens | 1,250 |
+| Total output tokens | 15,890 |
+| Cache read tokens | 850,000 |
+| Total duration | 8m 32s |
+| Git branch | feature/auth |
+
+**Tools breakdown:**
+- Bash: 12
+- Read: 10
+- Edit: 8
+- Grep: 7
+- Write: 5
+- Glob: 3
+- Task: 2
+```
+
+### Thinking Blocks (`--thinking`)
+
+When Claude uses extended thinking (e.g., with Opus models), the internal reasoning is captured. By default, thinking blocks are hidden. Use `--thinking` to include them:
+
+```bash
+# Include thinking blocks
+claude-extract --thinking --extract 1
+
+# Thinking + detailed (full picture)
+claude-extract --thinking --detailed --extract 1
+```
+
+In Markdown output, thinking blocks render as collapsible sections:
+
+```markdown
+<details>
+<summary>Claude's Thinking</summary>
+
+Let me analyze this step by step. The user wants to refactor
+the authentication middleware, so I need to understand the
+current flow before suggesting changes...
+
+</details>
+```
+
+In HTML, thinking blocks have a distinct visual style and are collapsed by default.
+
+### Combining Flags
+
+```bash
+# The full picture: detailed + thinking + HTML
+claude-extract --detailed --thinking --format html --extract 1
+
+# All sessions, fully detailed
+claude-extract --detailed --thinking --all --output ~/full-archive
+```
+
+---
+
+## Subagent Conversations
+
+When Claude Code spawns subagents (via the Task tool), their conversations are stored in separate JSONL files under a `subagents/` directory. The extractor automatically:
+
+1. **Discovers** subagent files for each session
+2. **Inlines** them at the exact point where the Task tool was invoked
+3. **Excludes** subagent files from the session listing (they're not standalone conversations)
+
+In Markdown output, subagents appear as nested sections:
+
+```markdown
+### Subagent: general-purpose
+
+> Model: claude-haiku-4-5
+
+#### User (subagent)
+Search for all files matching *.test.ts
+
+#### Claude (subagent)
+Found 12 test files...
+```
+
+In HTML, subagent conversations are visually indented with a distinct border.
+
+No special flags are needed -- subagent handling is automatic.
 
 ---
 
@@ -193,483 +360,379 @@ claude-extract --detailed --all
 ### Organize by Date
 
 ```bash
-# Organize into date folders (YYYY-MM-DD)
+# Group into date folders (YYYY-MM-DD)
 claude-extract --by-day --all
-
-# Recent sessions by date
-claude-extract --by-day --recent 20
-
-# Specific sessions by date
-claude-extract --by-day --extract 1,2,3
 ```
 
-Output structure:
 ```
 Claude logs/
-├── 2025-01-10/
-│   └── claude-conversation-2025-01-10-abc123.md
-├── 2025-01-11/
-│   └── claude-conversation-2025-01-11-def456.md
-└── 2025-01-12/
-    └── claude-conversation-2025-01-12-ghi789.md
+  2026-02-14/
+    2026-02-14-09_15-abc12345.md
+    2026-02-14-14_30-def67890.md
+  2026-02-15/
+    2026-02-15-10_00-ghi11223.md
 ```
 
 ### Organize by Project
 
 ```bash
-# Organize into project folders
+# Group into project folders
 claude-extract --by-project --all
-
-# Recent sessions by project
-claude-extract --by-project --recent 10
-
-# Specific sessions by project
-claude-extract --by-project --extract 1,2,3
 ```
 
-Output structure:
 ```
 Claude logs/
-├── my-webapp/
-│   └── claude-conversation-2025-01-12-abc123.md
-└── data-pipeline/
-    └── claude-conversation-2025-01-11-def456.md
+  my-webapp/
+    2026-02-15-10_00-abc12345.md
+  data-pipeline/
+    2026-02-14-09_15-def67890.md
 ```
 
-### Combined Organization (Project + Date)
+### Combined (Project + Date)
 
 ```bash
-# Full hierarchy: project/date/
+# Full hierarchy
 claude-extract --by-project --by-day --all
-
-# With custom output
-claude-extract --by-project --by-day --all --output ~/claude-archive
 ```
 
-Output structure:
 ```
 Claude logs/
-├── my-webapp/
-│   ├── 2025-01-10/
-│   │   └── claude-conversation-2025-01-10-abc123.md
-│   └── 2025-01-12/
-│       └── claude-conversation-2025-01-12-def456.md
-└── data-pipeline/
-    └── 2025-01-11/
-        └── claude-conversation-2025-01-11-ghi789.md
-```
-
-### Overwrite vs Skip Existing
-
-```bash
-# Skip existing files (default behavior)
-claude-extract --all
-
-# Explicitly skip existing (same as default)
-claude-extract --skip-existing --all
-
-# Overwrite existing files
-claude-extract --overwrite --all
-
-# Overwrite with organization
-claude-extract --overwrite --by-day --all
+  my-webapp/
+    2026-02-14/
+      2026-02-14-09_15-abc12345.md
+    2026-02-15/
+      2026-02-15-10_00-def67890.md
+  data-pipeline/
+    2026-02-14/
+      2026-02-14-14_30-ghi11223.md
 ```
 
 ---
 
 ## Date Filtering
 
-### Filter by Start Date
+Filter sessions by when they were last modified:
 
 ```bash
-# Extract sessions from January 1, 2025 onwards
-claude-extract --from-date 2025-01-01 --all
+# Sessions from a specific date onwards
+claude-extract --from-date 2026-01-01 --all
 
-# Recent with start date
-claude-extract --from-date 2025-01-01 --recent 10
+# Sessions up to a specific date
+claude-extract --to-date 2026-01-31 --all
+
+# Date range
+claude-extract --from-date 2026-01-01 --to-date 2026-01-31 --all
+
+# Combine with other flags
+claude-extract --from-date 2026-02-01 --by-day --detailed --all
 ```
 
-### Filter by End Date
-
-```bash
-# Extract sessions up to January 31, 2025
-claude-extract --to-date 2025-01-31 --all
-
-# Recent with end date
-claude-extract --to-date 2025-01-31 --recent 10
-```
-
-### Filter by Date Range
-
-```bash
-# Extract sessions within a specific month
-claude-extract --from-date 2025-01-01 --to-date 2025-01-31 --all
-
-# Extract last week
-claude-extract --from-date 2025-01-08 --to-date 2025-01-15 --all
-
-# Date range with organization
-claude-extract --from-date 2025-01-01 --to-date 2025-01-31 --by-day --all
-
-# Date range with project filter
-claude-extract --from-date 2025-01-01 --project 1 --all
-```
+Date format: `YYYY-MM-DD`
 
 ---
 
 ## Project Filtering
 
-### List Projects
+### List Available Projects
 
 ```bash
-# List all available projects with details
 claude-extract --list-projects
 ```
 
-### Filter by Project
+### Extract from Specific Projects
 
 ```bash
-# Extract all sessions from project #1
+# All sessions from project #1
 claude-extract --project 1 --all
 
-# Extract from multiple projects
-claude-extract --project 1,3,5 --all
+# From multiple projects
+claude-extract --project 1,3 --all
 
 # Recent sessions from a project
 claude-extract --project 2 --recent 10
 
-# Specific sessions from a project
-claude-extract --project 1 --extract 1,2,3
+# Combine with date filter
+claude-extract --project 1 --from-date 2026-01-01 --all
 ```
 
-### Combine with Other Options
+---
+
+## Session ID Lookup
+
+If you know part of a session UUID (visible in filenames or the `--list` output), you can extract it directly:
 
 ```bash
-# Project filter with date range
-claude-extract --project 1 --from-date 2025-01-01 --all
+# Partial UUID (first 8 characters)
+claude-extract --session-id abc12345
 
-# Project filter with organization
-claude-extract --project 1 --by-day --all
+# Full UUID
+claude-extract --session-id abc12345-6789-4def-abcd-123456789012
 
-# Project filter with format
-claude-extract --project 1 --format html --all
+# Session ID with bash commands
+claude-extract --bash-commands --session-id abc12345
+
+# Session ID with tool ops
+claude-extract --tool-ops --session-id abc12345
+
+# Session ID with detailed + thinking
+claude-extract --detailed --thinking --session-id abc12345
 ```
+
+This is useful when you find a session ID in another context (e.g., a log file, a filename, or a git commit message) and want to quickly pull up that specific conversation.
 
 ---
 
 ## Search Operations
 
-### Basic Search
+### Smart Search
+
+Fuzzy text matching across all conversations:
 
 ```bash
-# Interactive search
-claude-start
-# Then select "Search conversations"
+# Search all conversations
+claude-extract --search "authentication middleware"
 
-# Direct search command
-claude-search "error handling"
-
-# CLI search
-claude-extract --search "API integration"
+# Case-sensitive search
+claude-extract --search "APIError" --case-sensitive
 ```
 
 ### Regex Search
 
 ```bash
-# Search with regex pattern
+# Search with regex
 claude-extract --search-regex "import.*pandas"
 
-# Search for function definitions
+# Find function definitions
 claude-extract --search-regex "def\s+\w+"
 
-# Search for class definitions
-claude-extract --search-regex "class\s+\w+"
+# Find error patterns
+claude-extract --search-regex "Error:.*"
 ```
 
-### Search with Date Filters
+### Filter by Speaker
+
+```bash
+# Only user messages
+claude-extract --search "how do I" --search-speaker human
+
+# Only Claude's responses
+claude-extract --search "here's how" --search-speaker assistant
+```
+
+### Filter by Date
 
 ```bash
 # Search within date range
-claude-extract --search "bug fix" --search-date-from 2025-01-01
-
-# Search with end date
-claude-extract --search "feature" --search-date-to 2025-01-31
-
-# Search in specific date range
-claude-extract --search "refactor" --search-date-from 2025-01-01 --search-date-to 2025-01-15
+claude-extract --search "bug fix" --search-date-from 2026-01-01 --search-date-to 2026-01-31
 ```
 
-### Search by Speaker
+### Real-Time Search
 
 ```bash
-# Search only user messages
-claude-extract --search "how do I" --search-speaker human
-
-# Search only Claude's responses
-claude-extract --search "here's how" --search-speaker assistant
-
-# Search both (default)
-claude-extract --search "python" --search-speaker both
+# Launch interactive real-time search
+claude-search
 ```
 
-### Case-Sensitive Search
-
-```bash
-# Case-sensitive search
-claude-extract --search "API" --case-sensitive
-
-# Case-insensitive (default)
-claude-extract --search "api"
-```
+This opens a terminal UI where results update as you type.
 
 ---
 
 ## Bash Commands Extraction
 
-Extract only successful bash commands with context:
-
-### Basic Bash Extraction
+Extract only the bash commands Claude executed (successful ones), with the context of what was being done:
 
 ```bash
-# Extract bash commands from session #1
+# From a specific session
 claude-extract --bash-commands --extract 1
 
-# Extract from multiple sessions
-claude-extract --bash-commands --extract 1,3,5
-
-# Extract from recent sessions
-claude-extract --bash-commands --recent 10
-
-# Extract from all sessions
+# From all sessions
 claude-extract --bash-commands --all
+
+# From recent sessions, organized by project
+claude-extract --bash-commands --by-project --recent 20
+
+# From a date range
+claude-extract --bash-commands --from-date 2026-01-01 --all
 ```
 
-### With Organization
-
-```bash
-# Bash commands organized by date
-claude-extract --bash-commands --by-day --all
-
-# Bash commands organized by project
-claude-extract --bash-commands --by-project --all
-
-# Full organization
-claude-extract --bash-commands --by-project --by-day --all
-```
-
-### With Filters
-
-```bash
-# Bash commands from specific project
-claude-extract --bash-commands --project 1 --all
-
-# Bash commands from date range
-claude-extract --bash-commands --from-date 2025-01-01 --all
-
-# Combined filters
-claude-extract --bash-commands --project 1 --from-date 2025-01-01 --by-day --all
-```
+Output includes each command, its output, and the context of what Claude was doing.
 
 ---
 
 ## Tool Operations Extraction
 
-Extract file operations, search patterns, web research, and git commands:
-
-### Basic Tool Operations
+Extract all tool invocations (file reads, writes, searches, web fetches, etc.):
 
 ```bash
-# Extract all tool operations from session #1
+# All tool operations from a session
 claude-extract --tool-ops --extract 1
 
-# Extract from multiple sessions
-claude-extract --tool-ops --extract 1,3,5
+# Filter by category
+claude-extract --tool-ops --tool-filter file --all      # Read, Write, Edit
+claude-extract --tool-ops --tool-filter search --all    # Grep, Glob
+claude-extract --tool-ops --tool-filter web --all       # WebFetch, WebSearch
+claude-extract --tool-ops --tool-filter git --all       # Git operations
 
-# Extract from recent sessions
-claude-extract --tool-ops --recent 10
-
-# Extract from all sessions
-claude-extract --tool-ops --all
-```
-
-### Filter by Category
-
-Categories: `file`, `search`, `web`, `git`
-
-```bash
-# Extract only file operations (Read, Write, Edit)
-claude-extract --tool-ops --tool-filter file --all
-
-# Extract only search operations (Grep, Glob)
-claude-extract --tool-ops --tool-filter search --all
-
-# Extract only web operations (WebFetch, WebSearch)
-claude-extract --tool-ops --tool-filter web --all
-
-# Extract only git operations
-claude-extract --tool-ops --tool-filter git --all
-
-# Extract multiple categories
-claude-extract --tool-ops --tool-filter file,search --all
-```
-
-### Filter by Specific Tools
-
-Tools: `Read`, `Write`, `Edit`, `Grep`, `Glob`, `WebFetch`, `WebSearch`
-
-```bash
-# Extract only Read operations
-claude-extract --tool-ops --tool-filter Read --all
-
-# Extract only Grep and Glob operations
-claude-extract --tool-ops --tool-filter Grep,Glob --all
-
-# Extract Write and Edit operations
-claude-extract --tool-ops --tool-filter Write,Edit --all
+# Filter by specific tool
+claude-extract --tool-ops --tool-filter Grep,Glob --extract 1
 
 # Mix categories and tools
 claude-extract --tool-ops --tool-filter file,Grep --all
-```
 
-### With Detailed Results
-
-```bash
-# Include full tool results (file contents, search output, etc.)
+# Include full results (file contents, search output)
 claude-extract --tool-ops --detailed --all
 
-# Detailed with filter
-claude-extract --tool-ops --detailed --tool-filter file --all
-```
-
-### With Organization
-
-```bash
-# Tool operations organized by date
-claude-extract --tool-ops --by-day --all
-
-# Tool operations organized by project
-claude-extract --tool-ops --by-project --all
-
-# Full organization
+# Organized by project and date
 claude-extract --tool-ops --by-project --by-day --all
-```
-
-### With Other Filters
-
-```bash
-# Tool operations from specific project
-claude-extract --tool-ops --project 1 --all
-
-# Tool operations from date range
-claude-extract --tool-ops --from-date 2025-01-01 --all
-
-# Combined filters
-claude-extract --tool-ops --tool-filter file --project 1 --from-date 2025-01-01 --by-day --all
 ```
 
 ---
 
-## Combined Examples
+## Cross-Platform Usage
 
-### Daily Backup Script
+The tool works on Windows, macOS, Linux, and WSL.
+
+### Default Data Location
+
+| Platform | Claude data directory |
+|----------|---------------------|
+| macOS/Linux | `~/.claude/projects/` |
+| Windows | `%USERPROFILE%\.claude\projects\` |
+| WSL | `/home/username/.claude/projects/` |
+
+### WSL Accessing Windows Claude Data
+
+If you installed Claude Code on Windows but want to run the extractor from WSL:
 
 ```bash
-# Full daily backup with organization
-claude-extract --by-project --by-day --all --output ~/claude-daily-backup
+# Point to Windows Claude data from WSL
+claude-extract --claude-dir /mnt/c/Users/YourUsername/.claude/projects --list
 
-# Detailed HTML backup
-claude-extract --by-project --by-day --format html --detailed --all --output ~/claude-backup
+# Extract from Windows data
+claude-extract --claude-dir /mnt/c/Users/YourUsername/.claude/projects --all
 
-# Incremental backup (skips existing)
-claude-extract --by-project --by-day --all --output ~/claude-backup
+# Combine with any other flags
+claude-extract --claude-dir /mnt/c/Users/YourUsername/.claude/projects \
+  --detailed --thinking --by-project --all --output ~/claude-from-windows
+```
+
+### Windows Accessing WSL Claude Data
+
+If you installed Claude Code in WSL but want to run from Windows:
+
+```bash
+claude-extract --claude-dir \\wsl$\Ubuntu\home\username\.claude\projects --list
+```
+
+### Custom Claude Directory
+
+The `--claude-dir` flag works for any non-standard location:
+
+```bash
+# Custom path
+claude-extract --claude-dir /path/to/custom/.claude/projects --list
+
+# Network share
+claude-extract --claude-dir /mnt/nas/backups/.claude/projects --list
+```
+
+---
+
+## Combined Examples and Recipes
+
+### Full Archive with Everything
+
+```bash
+# Complete detailed archive organized by project and date
+claude-extract --detailed --thinking --by-project --by-day --all \
+  --output ~/claude-archive
+```
+
+### Daily Backup
+
+```bash
+# Incremental backup (skips already-extracted sessions)
+claude-extract --by-project --by-day --all --output ~/claude-backups
+
+# Full detailed HTML backup
+claude-extract --detailed --format html --by-project --by-day --all \
+  --output ~/claude-backups-html
 ```
 
 ### Export for Analysis
 
 ```bash
-# Export all as JSON for programmatic analysis
-claude-extract --format json --all --output ~/claude-json-archive
+# JSON export for programmatic analysis
+claude-extract --format json --detailed --all --output ~/claude-json
 
-# Export tool operations for workflow analysis
-claude-extract --tool-ops --format json --all --output ~/tool-analysis
-
-# Export bash commands for script documentation
+# Bash command history for documentation
 claude-extract --bash-commands --all --output ~/bash-history
+
+# Tool usage analysis
+claude-extract --tool-ops --detailed --all --output ~/tool-analysis
 ```
 
-### Project-Specific Export
+### Project-Specific Work
 
 ```bash
-# Export everything from a specific project
-claude-extract --project 1 --by-day --detailed --format html --all
+# Everything from project #1 this month
+claude-extract --project 1 --from-date 2026-02-01 --detailed --by-day --all
 
-# Export recent work on project
-claude-extract --project 1 --recent 10 --by-day --output ~/current-project
+# Recent work on a project as HTML
+claude-extract --project 1 --recent 10 --format html --output ~/current-project
 
-# Export project's tool operations
+# Project's tool operations
 claude-extract --tool-ops --project 1 --by-day --all
 ```
 
-### Time-Based Reports
+### Finding a Past Conversation
 
 ```bash
-# This month's conversations
-claude-extract --from-date 2025-01-01 --to-date 2025-01-31 --by-day --all
+# Search for a topic
+claude-extract --search "database migration"
 
-# Last week's detailed export
-claude-extract --from-date 2025-01-08 --detailed --format html --all
+# Search for a specific error
+claude-extract --search-regex "ConnectionRefused.*5432"
 
-# Q1 2025 archive
-claude-extract --from-date 2025-01-01 --to-date 2025-03-31 --by-project --by-day --all
-```
+# Search user messages only
+claude-extract --search "how to deploy" --search-speaker human
 
-### Search and Export
-
-```bash
-# Search and view results
-claude-extract --search "machine learning"
-
-# Export matching as HTML
-claude-extract --search "API" --format html
-
-# Regex search for patterns
-claude-extract --search-regex "async.*await" --format json
+# Then extract the session you found
+claude-extract --session-id abc12345 --detailed --thinking
 ```
 
 ---
 
-## Automation & Scripting
+## Automation and Scripting
 
-### Cron Job for Daily Backup
+### Cron Job (Linux/macOS)
 
 ```bash
-# Add to crontab (crontab -e)
-# Run at 2 AM daily
-0 2 * * * /usr/local/bin/claude-extract --by-project --by-day --all --output ~/claude-backups
+# Add to crontab: crontab -e
+# Run daily at 2 AM
+0 2 * * * /usr/local/bin/claude-extract --by-project --by-day --all --output ~/claude-backups 2>&1 >> ~/claude-backup.log
 ```
 
-### Bash Backup Script
+### Bash Script
 
 ```bash
 #!/bin/bash
-# backup-claude.sh
+# backup-claude.sh - Daily Claude conversation backup
 
 DATE=$(date +%Y-%m-%d)
 BACKUP_DIR=~/backups/claude-$DATE
 
-# Create backup
-claude-extract --by-project --by-day --all --output "$BACKUP_DIR"
+# Extract all conversations
+claude-extract --by-project --by-day --detailed --all --output "$BACKUP_DIR"
 
 # Compress
-tar -czf ~/backups/claude-$DATE.tar.gz "$BACKUP_DIR"
-
-# Clean up directory
+tar -czf ~/backups/claude-$DATE.tar.gz -C ~/backups "claude-$DATE"
 rm -rf "$BACKUP_DIR"
 
-echo "Backup completed: ~/backups/claude-$DATE.tar.gz"
+echo "Backup: ~/backups/claude-$DATE.tar.gz"
 ```
 
-### PowerShell Backup Script (Windows)
+### PowerShell Script (Windows)
 
 ```powershell
 # backup-claude.ps1
@@ -677,39 +740,46 @@ echo "Backup completed: ~/backups/claude-$DATE.tar.gz"
 $Date = Get-Date -Format "yyyy-MM-dd"
 $BackupDir = "$env:USERPROFILE\backups\claude-$Date"
 
-# Create backup
-claude-extract --by-project --by-day --all --output $BackupDir
+claude-extract --by-project --by-day --detailed --all --output $BackupDir
 
-# Compress
 Compress-Archive -Path $BackupDir -DestinationPath "$env:USERPROFILE\backups\claude-$Date.zip"
-
-# Clean up
 Remove-Item -Recurse -Force $BackupDir
 
-Write-Host "Backup completed: $env:USERPROFILE\backups\claude-$Date.zip"
+Write-Host "Backup: $env:USERPROFILE\backups\claude-$Date.zip"
 ```
 
 ### Python Integration
 
 ```python
-import subprocess
-import json
 from pathlib import Path
+from extract_claude_logs import ClaudeConversationExtractor
 
-# Export as JSON
-result = subprocess.run(
-    ["claude-extract", "--format", "json", "--all", "--output", "/tmp/claude-export"],
-    capture_output=True,
-    text=True
+# Initialize
+extractor = ClaudeConversationExtractor(output_dir="./exports")
+
+# List sessions
+sessions = extractor.find_sessions()
+print(f"Found {len(sessions)} sessions")
+
+# Extract a conversation
+conversation = extractor.extract_conversation(
+    sessions[0],
+    detailed=True,
+    include_thinking=True
 )
 
-# Process exported files
-export_dir = Path("/tmp/claude-export")
-for json_file in export_dir.glob("*.json"):
-    with open(json_file) as f:
-        conversation = json.load(f)
-        print(f"Session: {conversation['session_id']}")
-        print(f"Messages: {conversation['message_count']}")
+# Access messages
+for msg in conversation:
+    if msg["role"] == "user":
+        print(f"User: {msg['content'][:80]}...")
+    elif msg["role"] == "assistant":
+        print(f"Claude: {msg['content'][:80]}...")
+    elif msg["role"] == "stats":
+        print(f"Stats: {msg['content']}")
+
+# Save as markdown
+output = extractor.save_as_markdown(conversation, sessions[0].stem)
+print(f"Saved to: {output}")
 ```
 
 ---
@@ -718,30 +788,65 @@ for json_file in export_dir.glob("*.json"):
 
 | Task | Command |
 |------|---------|
-| Interactive UI | `claude-start` |
-| List sessions | `claude-extract --list` |
-| List projects | `claude-extract --list-projects` |
-| Extract latest | `claude-extract --extract 1` |
-| Extract all | `claude-extract --all` |
-| Extract recent N | `claude-extract --recent N` |
-| Search | `claude-search "query"` |
-| Export as JSON | `claude-extract --format json --all` |
-| Export as HTML | `claude-extract --format html --all` |
-| Detailed mode | `claude-extract --detailed --all` |
-| Organize by date | `claude-extract --by-day --all` |
-| Organize by project | `claude-extract --by-project --all` |
-| Filter by project | `claude-extract --project 1 --all` |
-| Filter by date | `claude-extract --from-date YYYY-MM-DD --all` |
-| Bash commands only | `claude-extract --bash-commands --all` |
-| Tool operations | `claude-extract --tool-ops --all` |
-| File ops only | `claude-extract --tool-ops --tool-filter file --all` |
-| Overwrite existing | `claude-extract --overwrite --all` |
+| **Interactive UI** | `claude-start` |
+| **List sessions** | `claude-extract --list` |
+| **List projects** | `claude-extract --list-projects` |
+| **Extract latest** | `claude-extract --extract 1` |
+| **Extract all** | `claude-extract --all` |
+| **Extract recent N** | `claude-extract --recent N` |
+| **Extract by session ID** | `claude-extract --session-id abc12345` |
+| **Search** | `claude-search "query"` |
+| **Regex search** | `claude-extract --search-regex "pattern"` |
+| **Export as JSON** | `claude-extract --format json --all` |
+| **Export as HTML** | `claude-extract --format html --all` |
+| **Detailed mode** | `claude-extract --detailed --all` |
+| **Include thinking** | `claude-extract --thinking --extract 1` |
+| **Organize by date** | `claude-extract --by-day --all` |
+| **Organize by project** | `claude-extract --by-project --all` |
+| **Filter by project** | `claude-extract --project 1 --all` |
+| **Filter by date** | `claude-extract --from-date 2026-01-01 --all` |
+| **Bash commands only** | `claude-extract --bash-commands --all` |
+| **Tool operations** | `claude-extract --tool-ops --all` |
+| **File ops only** | `claude-extract --tool-ops --tool-filter file --all` |
+| **Overwrite existing** | `claude-extract --overwrite --all` |
+| **Custom output dir** | `claude-extract --output ~/my-logs --all` |
+| **Custom Claude dir** | `claude-extract --claude-dir /path/to/projects --list` |
+| **WSL -> Windows data** | `claude-extract --claude-dir /mnt/c/Users/me/.claude/projects --list` |
+| **Full help** | `claude-extract --help` |
 
 ---
 
-## Help
+## All CLI Flags
 
-```bash
-# Show all available options
-claude-extract --help
-```
+| Flag | Description |
+|------|-------------|
+| `--list` | List recent sessions |
+| `--list-projects` | List all projects |
+| `--extract N` | Extract session(s) by number (comma-separated) |
+| `--session-id ID` | Extract session by UUID (full or partial) |
+| `--recent N` | Extract N most recent sessions |
+| `--all` | Extract all sessions |
+| `--output DIR` | Output directory |
+| `--claude-dir DIR` | Override Claude projects directory |
+| `--format {markdown,json,html}` | Output format (default: markdown) |
+| `--detailed` | Include tool use, system messages, metadata, stats |
+| `--thinking` | Include Claude's thinking/reasoning blocks |
+| `--by-day` | Organize into date folders |
+| `--by-project` | Organize into project folders |
+| `--project N` | Filter by project number(s) |
+| `--from-date YYYY-MM-DD` | Filter sessions from this date |
+| `--to-date YYYY-MM-DD` | Filter sessions up to this date |
+| `--bash-commands` | Extract bash commands instead of conversations |
+| `--tool-ops` | Extract tool operations instead of conversations |
+| `--tool-filter FILTER` | Filter tool ops by category or name |
+| `--search QUERY` | Search conversations (smart matching) |
+| `--search-regex PATTERN` | Search with regex |
+| `--search-speaker {human,assistant,both}` | Filter search by speaker |
+| `--search-date-from DATE` | Search from date |
+| `--search-date-to DATE` | Search to date |
+| `--case-sensitive` | Case-sensitive search |
+| `--overwrite` | Overwrite existing output files |
+| `--skip-existing` | Skip existing files (default) |
+| `--limit N` | Limit for `--list` command |
+| `--interactive`, `-i` | Launch interactive UI |
+| `--help` | Show help |
