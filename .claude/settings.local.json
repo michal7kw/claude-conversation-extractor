@@ -18,7 +18,13 @@
       "Bash(pip install:*)",
       "Bash(git stash:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(uv venv:*)",
+      "Bash(uv pip:*)",
+      "Bash(.venv/Scripts/python -m pytest tests/test_last_update_filter.py -v)",
+      "Bash(.venv/Scripts/python -m pytest tests/ -v)",
+      "Bash(.venv/Scripts/python -m pytest tests/test_last_update_filter.py tests/test_extract_claude_logs_aligned.py tests/test_extract_comprehensive.py -v)",
+      "Bash(.venv/Scripts/python src/extract_claude_logs.py --help)"
     ]
   }
 }

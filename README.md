@@ -2,9 +2,9 @@
 
 run
 ```
-claude-extract --overwrite --from-date 2026-01-14 --by-project --by-day --all --output .
+claude-extract --overwrite --from-date 2026-03-18 --by-project --by-day --all --output .
+claude-extract --overwrite --from-last-update 2026-03-18 --by-project --by-day --all --output .
 ```
-
 
 > **The ONLY tool to export Claude Code conversations**. Extract Claude chat history from ~/.claude/projects, search through logs, and backup your AI programming sessions.
 

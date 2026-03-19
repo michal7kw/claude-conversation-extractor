@@ -1310,6 +1310,30 @@ class ClaudeConversationExtractor:
             pass
         return datetime.now().strftime("%Y-%m-%d")
 
+    def _get_last_update_from_session(self, session_path: Path) -> str:
+        """Extract date string from a session file's last message timestamp.
+
+        Reads through the JSONL file and returns the last valid timestamp found.
+        Returns date in YYYY-MM-DD format, or falls back to creation date.
+        """
+        last_date = None
+        try:
+            with open(session_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    try:
+                        entry = json.loads(line.strip())
+                        timestamp = entry.get("timestamp", "")
+                        if timestamp:
+                            dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                            last_date = dt.strftime("%Y-%m-%d")
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+        except Exception:
+            pass
+        if last_date:
+            return last_date
+        return self._get_date_from_session(session_path)
+
     def filter_sessions_by_date(
         self, sessions: List[Path],
         from_date: Optional[datetime] = None,
@@ -1340,6 +1364,48 @@ class ClaudeConversationExtractor:
 
                 # Check to_date (include the entire day)
                 if to_date and session_date > to_date:
+                    continue
+
+                filtered.append(session_path)
+            except ValueError:
+                # If we can't parse the date, include the session
+                filtered.append(session_path)
+
+        return filtered
+
+    def filter_sessions_by_last_update(
+        self, sessions: List[Path],
+        from_date: Optional[datetime] = None,
+        to_date: Optional[datetime] = None
+    ) -> List[Path]:
+        """Filter sessions by last-update date range.
+
+        Unlike filter_sessions_by_date() which uses the first entry's timestamp,
+        this uses the last entry's timestamp to filter by most recent activity.
+
+        Args:
+            sessions: List of session paths
+            from_date: Only include sessions last updated on or after this date
+            to_date: Only include sessions last updated on or before this date
+
+        Returns:
+            Filtered list of session paths
+        """
+        if not from_date and not to_date:
+            return sessions
+
+        filtered = []
+        for session_path in sessions:
+            date_str = self._get_last_update_from_session(session_path)
+            try:
+                last_update = datetime.strptime(date_str, "%Y-%m-%d")
+
+                # Check from_date
+                if from_date and last_update < from_date:
+                    continue
+
+                # Check to_date (include the entire day)
+                if to_date and last_update > to_date:
                     continue
 
                 filtered.append(session_path)
@@ -2755,6 +2821,8 @@ Examples:
   %(prog)s --from-date 2025-01-01 --all   # Extract sessions from Jan 1, 2025
   %(prog)s --to-date 2025-01-31 --all     # Extract sessions up to Jan 31, 2025
   %(prog)s --from-date 2025-01-01 --to-date 2025-01-31 --all  # Date range
+  %(prog)s --from-last-update 2025-03-17 --all  # Sessions updated since Mar 17
+  %(prog)s --from-last-update 2025-03-01 --to-last-update 2025-03-15 --all  # Update date range
   %(prog)s --list-projects             # List all projects
   %(prog)s --project 1 --all           # Extract all sessions from project 1
   %(prog)s --project 1,3 --recent 5    # Extract recent from multiple projects
@@ -2900,6 +2968,16 @@ Examples:
         type=str,
         help="Only extract sessions up to this date (YYYY-MM-DD)"
     )
+    parser.add_argument(
+        "--from-last-update",
+        type=str,
+        help="Only extract sessions last updated on or after this date (YYYY-MM-DD)"
+    )
+    parser.add_argument(
+        "--to-last-update",
+        type=str,
+        help="Only extract sessions last updated on or before this date (YYYY-MM-DD)"
+    )
 
     args = parser.parse_args()
 
@@ -2928,6 +3006,28 @@ Examples:
     # Validate date range
     if from_date and to_date and from_date > to_date:
         print("❌ Error: --from-date cannot be after --to-date")
+        return
+
+    # Parse last-update date filters
+    from_last_update = None
+    to_last_update = None
+    if args.from_last_update:
+        try:
+            from_last_update = datetime.strptime(args.from_last_update, "%Y-%m-%d")
+        except ValueError:
+            print(f"❌ Invalid date format for --from-last-update: {args.from_last_update} (use YYYY-MM-DD)")
+            return
+
+    if args.to_last_update:
+        try:
+            to_last_update = datetime.strptime(args.to_last_update, "%Y-%m-%d")
+        except ValueError:
+            print(f"❌ Invalid date format for --to-last-update: {args.to_last_update} (use YYYY-MM-DD)")
+            return
+
+    # Validate last-update date range
+    if from_last_update and to_last_update and from_last_update > to_last_update:
+        print("❌ Error: --from-last-update cannot be after --to-last-update")
         return
 
     # Handle interactive mode
@@ -3256,6 +3356,14 @@ Examples:
             if to_date:
                 print(f"📅 Filtering to: {to_date.strftime('%Y-%m-%d')}")
 
+        # Apply last-update date filter
+        if from_last_update or to_last_update:
+            sessions = extractor.filter_sessions_by_last_update(sessions, from_last_update, to_last_update)
+            if from_last_update:
+                print(f"📅 Filtering by last update from: {from_last_update.strftime('%Y-%m-%d')}")
+            if to_last_update:
+                print(f"📅 Filtering by last update to: {to_last_update.strftime('%Y-%m-%d')}")
+
         limit = min(args.recent, len(sessions))
         indices = list(range(limit))
 
@@ -3336,6 +3444,14 @@ Examples:
                 print(f"📅 Filtering from: {from_date.strftime('%Y-%m-%d')}")
             if to_date:
                 print(f"📅 Filtering to: {to_date.strftime('%Y-%m-%d')}")
+
+        # Apply last-update date filter
+        if from_last_update or to_last_update:
+            sessions = extractor.filter_sessions_by_last_update(sessions, from_last_update, to_last_update)
+            if from_last_update:
+                print(f"📅 Filtering by last update from: {from_last_update.strftime('%Y-%m-%d')}")
+            if to_last_update:
+                print(f"📅 Filtering by last update to: {to_last_update.strftime('%Y-%m-%d')}")
 
         indices = list(range(len(sessions)))
 
